@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-09-02
+
+### Added
+- A copy-model-name action for the selected loaded model and an aggregate VRAM summary.
+- A root-level panel preview and deterministic version, changelog, and preview release checks.
+
+### Changed
+- Reproducible strict QML CI now resolves the pinned Quickshell and Omarchy import environment.
+- Removal documentation now uses Omarchy’s canonical plugin removal command.
+
 ## [1.2.0] — 2026-09-02
 
 ### Added

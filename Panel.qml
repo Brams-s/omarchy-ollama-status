@@ -337,7 +337,7 @@ Panel {
               spacing: Style.space(3)
               Text { text: "LOCAL DIAGNOSTICS"; color: root.foreground; opacity: .58; font.pixelSize: Style.font.bodySmall; font.bold: true; textFormat: Text.PlainText }
               Text { text: "API · " + (root.ollamaService && root.ollamaService.localApiStatus === "available" ? "Available" : root.ollamaService && root.ollamaService.localApiStatus === "checking" ? "Checking" : "Unavailable"); color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
-              Text { visible: root.ollamaService && root.ollamaService.apiVersion !== ""; text: "Version · v" + root.plain(root.ollamaService.apiVersion, 80); color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.ollamaService && root.ollamaService.apiVersion !== ""; text: root.ollamaService ? "Version · v" + root.plain(root.ollamaService.apiVersion, 80) : ""; color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { text: root.refreshAge() + " · every " + root.configuredRefreshSec + "s · up to " + root.configuredModelLimit + " models"; color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { visible: root.statusFailure() !== ""; text: root.statusFailure(); color: root.urgent; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { visible: root.versionFailure() !== ""; text: root.versionFailure(); color: root.urgent; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
@@ -396,7 +396,7 @@ Panel {
             }
           }
 
-          Text { visible: root.ollamaService && root.ollamaService.errorText !== ""; width: parent.width; text: root.plain(root.ollamaService.errorText, 300); color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+          Text { visible: root.ollamaService && root.ollamaService.errorText !== ""; width: parent.width; text: root.ollamaService ? root.plain(root.ollamaService.errorText, 300) : ""; color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
           Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : root.refreshFeedback() !== "" ? root.refreshFeedback() : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
         }
       }

@@ -5,9 +5,11 @@ cd "$(dirname "$0")"
 python3 -m json.tool manifest.json >/dev/null
 python3 - <<'PY'
 import json
+import re
 from pathlib import Path
 manifest = json.load(open("manifest.json"))
-assert manifest["version"] == "1.2.0"
+version = manifest["version"]
+assert re.fullmatch(r"\d+\.\d+\.\d+", version)
 assert manifest["keepLoaded"] is True
 assert {"service", "bar-widget"}.issubset(manifest["kinds"])
 assert manifest["entryPoints"]["service"] == "Service.qml"
@@ -27,9 +29,12 @@ assert "lastRefreshCompletedMs" in service_source and "lastRefreshSucceeded" in 
 assert "versionErrorKind" in service_source and "models = models.slice(0, maxDisplayedModels)" in service_source
 readme = Path("README.md").read_text()
 changelog = Path("CHANGELOG.md").read_text()
-preview = Path("preview.png")
-assert f"## [{manifest['version']}] — 2026-09-02" in changelog
-assert "](preview.png)" in readme
+release_header = re.compile(rf"^## \[{re.escape(version)}\] — \d{{4}}-\d{{2}}-\d{{2}}$", re.MULTILINE)
+assert release_header.search(changelog)
+preview_match = re.search(r"!\[[^]]*\]\(([^)]+)\)", readme)
+assert preview_match
+preview = Path(preview_match.group(1))
+assert not preview.is_absolute() and preview.parent == Path(".")
 assert preview.is_file() and preview.stat().st_size > 0
 helper = Path("ci/qml-validate.sh")
 workflow = Path(".github/workflows/verify.yml")
