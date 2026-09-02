@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "OllamaModel.js" as OllamaModel
@@ -20,6 +21,8 @@ Panel {
   property bool confirmUnload: false
   property string confirmedModelName: ""
   property double nowMs: Date.now()
+  property string copyFeedback: ""
+  property double copyFeedbackUntilMs: 0
   readonly property var barIdentity: hostWidget || root
   readonly property var models: ollamaService && Array.isArray(ollamaService.models) ? ollamaService.models : []
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -45,6 +48,37 @@ Panel {
     if (lastRefreshCompletedMs > 0 && nowMs - lastRefreshCompletedMs < 4000)
       return lastRefreshSucceeded ? "Refresh complete" : "Refresh failed"
     return ""
+  }
+  function aggregateVram() {
+    var total = 0
+    for (var i = 0; i < models.length; i++) {
+      var amount = Number(models[i] && models[i].sizeVram)
+      if (isFinite(amount) && amount > 0) total += amount
+    }
+    return isFinite(total) && total > 0 ? OllamaModel.formatBytes(total) : ""
+  }
+  function setCopyFeedback(message) {
+    copyFeedback = message
+    copyFeedbackUntilMs = Date.now() + 3000
+    nowMs = Date.now()
+  }
+  function activeCopyFeedback() {
+    return copyFeedbackUntilMs > nowMs ? copyFeedback : ""
+  }
+  function copySelectedModelName() {
+    var modelName = modelNameAt(selectedIndex)
+    if (!modelName) {
+      setCopyFeedback("Copy unavailable — select a model")
+      return
+    }
+    if (copyProcess.running) {
+      setCopyFeedback("Copy already in progress")
+      return
+    }
+    // modelName is already plain-text sanitized and bounded by modelNameAt.
+    copyProcess.command = ["bash", "-c", "printf %s " + Util.shellQuote(modelName) + " | wl-copy"]
+    copyProcess.running = true
+    setCopyFeedback("Copying…")
   }
   function refreshAge() {
     if (!isFinite(lastSuccessfulRefreshMs) || lastSuccessfulRefreshMs <= 0) return "No successful refresh yet"
@@ -146,6 +180,20 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
+  // Clipboard execution belongs to the panel interaction, not the shared API
+  // service. Output is collected only to complete the process safely; it is
+  // never displayed because command output is not user-facing model data.
+  Process {
+    id: copyProcess
+    command: []
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.setCopyFeedback("Model name copied")
+      else root.setCopyFeedback("Clipboard unavailable")
+    }
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -172,6 +220,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refreshNow()
+        else if (text === "c" || text === "C") root.copySelectedModelName()
         else if ((text === "u" || text === "U") && root.selectedIndex >= 0) root.requestUnload(root.selectedIndex)
       }
 
@@ -231,6 +280,34 @@ Panel {
             }
           }
 
+          Item {
+            id: copyControl
+            visible: root.models.length > 0
+            width: parent.width
+            height: Style.space(30)
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.space(7)
+              color: copyMouse.containsMouse
+                ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
+                : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+            }
+            Row {
+              anchors.centerIn: parent
+              spacing: Style.space(6)
+              Text { text: "⧉"; color: Color.accent; font.pixelSize: Style.font.body; textFormat: Text.PlainText }
+              Text { text: root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : "Copy model name"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { text: "C"; color: root.foreground; opacity: .6; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+            }
+            MouseArea {
+              id: copyMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.copySelectedModelName()
+            }
+          }
+
           Rectangle {
             width: parent.width
             implicitHeight: summary.implicitHeight + Style.space(20)
@@ -244,7 +321,7 @@ Panel {
               Text { visible: !root.ollamaService || root.ollamaService.state === "checking"; text: "Checking Ollama…"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { visible: root.ollamaService && root.ollamaService.state === "unavailable"; text: "Ollama API unavailable\nCheck that Ollama is running and reachable."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
               Text { visible: root.ollamaService && (root.ollamaService.state === "idle" || (root.ollamaService.state === "loaded" && root.models.length === 0)); text: "No model loaded\nReady for your next prompt."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
-              Text { visible: root.models.length > 0; text: root.models.length + " model" + (root.models.length === 1 ? "" : "s") + " held in memory"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.models.length > 0; text: root.models.length + " model" + (root.models.length === 1 ? "" : "s") + " held in memory" + (root.aggregateVram() !== "" ? " · VRAM " + root.aggregateVram() : ""); color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
             }
           }
 
@@ -320,7 +397,7 @@ Panel {
           }
 
           Text { visible: root.ollamaService && root.ollamaService.errorText !== ""; width: parent.width; text: root.plain(root.ollamaService.errorText, 300); color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
-          Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.refreshFeedback() !== "" ? root.refreshFeedback() : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+          Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : root.refreshFeedback() !== "" ? root.refreshFeedback() : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
         }
       }
     }
