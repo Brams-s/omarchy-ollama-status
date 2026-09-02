@@ -8,7 +8,7 @@ Built for Omarchy's Quattro/Quickshell bar plugin host, using its shared third-p
 
 ## Preview
 
-![Ollama Status popup showing that no model is loaded and it is ready for the next prompt](assets/ollama-status-idle.png)
+![Ollama Status panel showing a loaded model, refresh control, and local API diagnostics](preview.png)
 
 ## Setup
 

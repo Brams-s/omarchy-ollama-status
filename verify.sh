@@ -27,9 +27,9 @@ assert "lastRefreshCompletedMs" in service_source and "lastRefreshSucceeded" in 
 assert "versionErrorKind" in service_source and "models = models.slice(0, maxDisplayedModels)" in service_source
 readme = Path("README.md").read_text()
 changelog = Path("CHANGELOG.md").read_text()
-preview = Path("assets/ollama-status-idle.png")
+preview = Path("preview.png")
 assert f"## [{manifest['version']}] — 2026-09-02" in changelog
-assert "](assets/ollama-status-idle.png)" in readme
+assert "](preview.png)" in readme
 assert preview.is_file() and preview.stat().st_size > 0
 PY
 bash -n status.sh
