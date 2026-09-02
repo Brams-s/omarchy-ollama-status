@@ -6,8 +6,12 @@
   "author": "brams",
   "license": "MIT",
   "description": "Ollama API status and loaded models for the Omarchy bar",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Ollama Status",
     "description": "Ollama server state and loaded models",
