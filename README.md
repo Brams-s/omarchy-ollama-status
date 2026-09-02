@@ -2,6 +2,10 @@
 
 A standalone Omarchy bar widget showing the local Ollama API state and models held in memory. It uses Ollama's documented `GET /api/ps` endpoint rather than parsing command-line output.
 
+## Preview
+
+![Ollama Status popup showing that no model is loaded and it is ready for the next prompt](assets/ollama-status-idle.png)
+
 ## Setup
 
 1. Install [Ollama](https://ollama.com) and start it in the way you prefer (a user service, a terminal, or another supervisor).

@@ -82,7 +82,7 @@ BarWidget {
     action.running = true
   }
 
-  readonly property string scriptPath: Qt.resolvedUrl("status.sh").toLocalFile()
+  readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl("status.sh").toString().replace(/^file:\/\//, ""))
   readonly property color normalForeground: root.bar ? root.bar.barForeground : Color.foreground
   readonly property color accentForeground: Color.accent
   readonly property color urgentForeground: root.bar ? root.bar.urgent : Color.urgent
@@ -177,7 +177,22 @@ BarWidget {
         anchors.fill: parent
         anchors.margins: 16
         spacing: 10
-        Row { width: parent.width; height: 22; spacing: 8; Text { text: "\uef3d"; color: root.accentForeground; font.pixelSize: Style.font.body }; Text { text: "Ollama"; color: root.normalForeground; font.bold: true; font.pixelSize: Style.font.body } }
+        Row {
+          width: parent.width
+          height: 22
+          spacing: 8
+          Text {
+            text: "\uef3d"
+            color: root.accentForeground
+            font.pixelSize: Style.font.body
+          }
+          Text {
+            text: "Ollama"
+            color: root.normalForeground
+            font.bold: true
+            font.pixelSize: Style.font.body
+          }
+        }
         Rectangle {
           width: parent.width
           implicitHeight: body.implicitHeight + 24
@@ -209,7 +224,28 @@ BarWidget {
                   Text { text: (parent.parent.sizeText !== "" ? parent.parent.sizeText : "") + (parent.parent.vramText !== "" ? " · VRAM " + parent.parent.vramText : "") + (parent.parent.contextText !== "" ? " · ctx " + parent.parent.contextText : ""); visible: text !== ""; color: root.normalForeground; opacity: .72; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; width: parent.width }
                   Text { text: root.relativeExpiry(parent.parent.expiryText); visible: text !== ""; color: root.normalForeground; opacity: .72; font.pixelSize: Style.font.bodySmall }
                 }
-                Rectangle { id: unloadButton; width: 54; height: 24; anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; radius: 6; color: root.alpha(root.urgentForeground, .10); opacity: root.busy && root.pendingModel === parent.name ? .5 : 1; Text { anchors.centerIn: parent; text: root.busy && root.pendingModel === parent.name ? "…" : "Unload"; color: root.urgentForeground; font.pixelSize: Style.font.bodySmall }; MouseArea { anchors.fill: parent; enabled: !root.busy; onClicked: root.unload(parent.parent.name) } }
+                Rectangle {
+                  id: unloadButton
+                  width: 54
+                  height: 24
+                  anchors.right: parent.right
+                  anchors.rightMargin: 10
+                  anchors.verticalCenter: parent.verticalCenter
+                  radius: 6
+                  color: root.alpha(root.urgentForeground, .10)
+                  opacity: root.busy && root.pendingModel === parent.name ? .5 : 1
+                  Text {
+                    anchors.centerIn: parent
+                    text: root.busy && root.pendingModel === parent.name ? "…" : "Unload"
+                    color: root.urgentForeground
+                    font.pixelSize: Style.font.bodySmall
+                  }
+                  MouseArea {
+                    anchors.fill: parent
+                    enabled: !root.busy
+                    onClicked: root.unload(parent.parent.name)
+                  }
+                }
               }
             }
           }
