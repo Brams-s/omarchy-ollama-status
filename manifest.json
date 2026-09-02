@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "brams.ollama-status",
+  "name": "Ollama Status",
+  "version": "1.1.1",
+  "author": "brams",
+  "license": "MIT",
+  "description": "Ollama API status and loaded models for the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Ollama Status",
+    "description": "Ollama server state and loaded models",
+    "category": "System",
+    "defaultSection": "left",
+    "allowMultiple": false
+  }
+}
