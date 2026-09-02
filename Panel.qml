@@ -23,6 +23,8 @@ Panel {
   property double nowMs: Date.now()
   property string copyFeedback: ""
   property double copyFeedbackUntilMs: 0
+  property bool copyBusy: false
+  property bool copyTimedOut: false
   readonly property var barIdentity: hostWidget || root
   readonly property var models: ollamaService && Array.isArray(ollamaService.models) ? ollamaService.models : []
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -49,7 +51,14 @@ Panel {
       return lastRefreshSucceeded ? "Refresh complete" : "Refresh failed"
     return ""
   }
+  function totalLoadedCount() {
+    if (!ollamaService) return models.length
+    var count = Number(ollamaService.loadedModelCount)
+    return isFinite(count) && count >= 0 ? Math.floor(count) : models.length
+  }
   function aggregateVram() {
+    var serviceTotal = Number(ollamaService && ollamaService.aggregateVramBytes)
+    if (isFinite(serviceTotal) && serviceTotal > 0) return OllamaModel.formatBytes(serviceTotal)
     var total = 0
     for (var i = 0; i < models.length; i++) {
       var amount = Number(models[i] && models[i].sizeVram)
@@ -66,17 +75,19 @@ Panel {
     return copyFeedbackUntilMs > nowMs ? copyFeedback : ""
   }
   function copySelectedModelName() {
-    var modelName = modelNameAt(selectedIndex)
-    if (!modelName) {
-      setCopyFeedback("Copy unavailable — select a model")
+    var modelId = actionableModelIdAt(selectedIndex)
+    if (!modelId) {
+      setCopyFeedback("Copy unavailable for this model")
       return
     }
-    if (copyProcess.running) {
-      setCopyFeedback("Copy already in progress")
+    if (copyBusy || copyTimedOut || copyProcess.running) {
+      setCopyFeedback(copyTimedOut ? "Clipboard is resetting" : "Copy already in progress")
       return
     }
-    // modelName is already plain-text sanitized and bounded by modelNameAt.
-    copyProcess.command = ["bash", "-c", "printf %s " + Util.shellQuote(modelName) + " | wl-copy"]
+    // Direct wl-copy invocation keeps the canonical action value out of a
+    // shell and makes the timeout target the only child process.
+    copyProcess.command = ["wl-copy", "--type", "text/plain;charset=utf-8", "--", modelId]
+    copyBusy = true
     copyProcess.running = true
     setCopyFeedback("Copying…")
   }
@@ -112,9 +123,12 @@ Panel {
     confirmUnload = false
     confirmedModelName = ""
   }
-  function modelNameAt(index) {
+  function actionableModelIdAt(index) {
     if (index < 0 || index >= models.length || !models[index]) return ""
-    return plain(models[index].name, 160)
+    var model = models[index]
+    // modelId has already passed the data lane's canonical validation. Do not
+    // route it through display truncation: valid actionable IDs can be longer.
+    return model.actionable === true && typeof model.modelId === "string" ? model.modelId : ""
   }
   function selectStep(step) {
     if (models.length === 0) { selectedIndex = -1; clearUnloadConfirmation(); return }
@@ -123,21 +137,26 @@ Panel {
     clearUnloadConfirmation()
   }
   function requestUnload(index) {
-    if (!ollamaService || ollamaService.busy || index < 0 || index >= models.length) return
-    var modelName = modelNameAt(index)
-    if (!modelName) return
+    if (index < 0 || index >= models.length) return
     if (selectedIndex !== index) {
       selectedIndex = index
       clearUnloadConfirmation()
     }
-    // Confirmation binds to the sanitized model identity, not the list slot:
-    // a refresh may reorder or replace the list between the two activations.
-    if (!confirmUnload || confirmedModelName !== modelName || modelNameAt(selectedIndex) !== confirmedModelName) {
-      confirmUnload = true
-      confirmedModelName = modelName
+    var modelId = actionableModelIdAt(index)
+    if (!modelId) {
+      clearUnloadConfirmation()
+      setCopyFeedback("Unload unavailable for this model")
       return
     }
-    if (ollamaService.unload(modelName)) clearUnloadConfirmation()
+    if (!ollamaService || ollamaService.busy) return
+    // Confirmation binds to the sanitized model identity, not the list slot:
+    // a refresh may reorder or replace the list between the two activations.
+    if (!confirmUnload || confirmedModelName !== modelId || actionableModelIdAt(selectedIndex) !== confirmedModelName) {
+      confirmUnload = true
+      confirmedModelName = modelId
+      return
+    }
+    if (ollamaService.unload(modelId)) clearUnloadConfirmation()
   }
   function ensureSelectedVisible() {
     if (selectedIndex < 0 || !modelRepeater || !modelFlick) return
@@ -169,7 +188,7 @@ Panel {
     Qt.callLater(ensureSelectedVisible)
   }
   onSelectedIndexChanged: {
-    if (confirmedModelName !== "" && modelNameAt(selectedIndex) !== confirmedModelName) clearUnloadConfirmation()
+    if (confirmedModelName !== "" && actionableModelIdAt(selectedIndex) !== confirmedModelName) clearUnloadConfirmation()
     Qt.callLater(ensureSelectedVisible)
   }
 
@@ -180,6 +199,20 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
+  Timer {
+    id: copyTimeout
+    interval: 3000
+    running: root.copyBusy
+    repeat: false
+    onTriggered: {
+      if (!root.copyBusy) return
+      root.copyBusy = false
+      root.copyTimedOut = true
+      copyProcess.signal(9)
+      root.setCopyFeedback("Clipboard timed out")
+    }
+  }
+
   // Clipboard execution belongs to the panel interaction, not the shared API
   // service. Output is collected only to complete the process safely; it is
   // never displayed because command output is not user-facing model data.
@@ -188,7 +221,27 @@ Panel {
     command: []
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    // A missing wl-copy may fail during process startup without emitting
+    // exited. Defer this recovery so a normal exited handler always gets the
+    // first chance to report its accurate zero/nonzero result.
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (copyProcess.running) return
+      if (root.copyBusy) {
+        root.copyBusy = false
+        copyTimeout.stop()
+        root.setCopyFeedback("Clipboard unavailable")
+      } else if (root.copyTimedOut) {
+        // Preserve timeout feedback even if the killed process never emits exited.
+        root.copyTimedOut = false
+      }
+    })
     onExited: function(exitCode) {
+      if (root.copyTimedOut) {
+        root.copyTimedOut = false
+        return
+      }
+      if (!root.copyBusy) return
+      root.copyBusy = false
       if (exitCode === 0) root.setCopyFeedback("Model name copied")
       else root.setCopyFeedback("Clipboard unavailable")
     }
@@ -291,12 +344,13 @@ Panel {
               color: copyMouse.containsMouse
                 ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
                 : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+              opacity: root.actionableModelIdAt(root.selectedIndex) !== "" ? 1 : .55
             }
             Row {
               anchors.centerIn: parent
               spacing: Style.space(6)
               Text { text: "⧉"; color: Color.accent; font.pixelSize: Style.font.body; textFormat: Text.PlainText }
-              Text { text: root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : "Copy model name"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { text: root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : root.actionableModelIdAt(root.selectedIndex) !== "" ? "Copy model name" : "Copy unavailable"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { text: "C"; color: root.foreground; opacity: .6; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
             }
             MouseArea {
@@ -321,7 +375,7 @@ Panel {
               Text { visible: !root.ollamaService || root.ollamaService.state === "checking"; text: "Checking Ollama…"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               Text { visible: root.ollamaService && root.ollamaService.state === "unavailable"; text: "Ollama API unavailable\nCheck that Ollama is running and reachable."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
               Text { visible: root.ollamaService && (root.ollamaService.state === "idle" || (root.ollamaService.state === "loaded" && root.models.length === 0)); text: "No model loaded\nReady for your next prompt."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
-              Text { visible: root.models.length > 0; text: root.models.length + " model" + (root.models.length === 1 ? "" : "s") + " held in memory" + (root.aggregateVram() !== "" ? " · VRAM " + root.aggregateVram() : ""); color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.totalLoadedCount() > 0; text: root.totalLoadedCount() + " total loaded model" + (root.totalLoadedCount() === 1 ? "" : "s") + (root.aggregateVram() !== "" ? " · VRAM " + root.aggregateVram() : ""); color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
             }
           }
 
@@ -372,7 +426,7 @@ Panel {
                 anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(2)
-                Text { width: parent.width; text: root.plain(parent.parent.modelItem.name, 160); color: root.foreground; font.pixelSize: Style.font.body; elide: Text.ElideRight; textFormat: Text.PlainText }
+                Text { width: parent.width; text: root.plain(parent.parent.modelItem.displayName, 160); color: root.foreground; font.pixelSize: Style.font.body; elide: Text.ElideRight; textFormat: Text.PlainText }
                 Text { width: parent.width; text: (parent.parent.modelItem.size > 0 ? OllamaModel.formatBytes(parent.parent.modelItem.size) : "") + (parent.parent.modelItem.sizeVram > 0 ? " · VRAM " + OllamaModel.formatBytes(parent.parent.modelItem.sizeVram) : "") + (parent.parent.modelItem.context ? " · ctx " + root.plain(parent.parent.modelItem.context, 20) : ""); visible: text !== ""; color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; textFormat: Text.PlainText }
                 Text { text: OllamaModel.relativeExpiry(parent.parent.modelItem.expiresAt); visible: text !== ""; color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
               }
@@ -381,7 +435,7 @@ Panel {
                 anchors.right: parent.right
                 anchors.rightMargin: Style.space(10)
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.ollamaService && root.ollamaService.busy && root.ollamaService.pendingModel === parent.modelItem.name ? "…" : selected && root.confirmUnload && root.confirmedModelName === root.modelNameAt(index) ? "Confirm" : "Unload"
+                text: root.ollamaService && root.ollamaService.busy && root.ollamaService.pendingModel === root.actionableModelIdAt(index) ? "…" : root.actionableModelIdAt(index) === "" ? "Unavailable" : selected && root.confirmUnload && root.confirmedModelName === root.actionableModelIdAt(index) ? "Confirm" : "Unload"
                 color: root.urgent
                 font.pixelSize: Style.font.bodySmall
                 font.underline: selected
@@ -390,7 +444,7 @@ Panel {
               MouseArea {
                 anchors.fill: parent
                 enabled: !root.ollamaService || !root.ollamaService.busy
-                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                cursorShape: root.actionableModelIdAt(index) !== "" && enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: root.requestUnload(index)
               }
             }

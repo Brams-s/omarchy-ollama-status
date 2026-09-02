@@ -69,8 +69,14 @@ if [[ "$operation" == "unload" ]]; then
     result_error "internal_error" "Could not prepare the unload request."
     exit 0
   }
-  if ! request --request POST --header "Content-Type: application/json" --data "$payload" "$host/api/chat"; then
-    result_error "transport_error" "Ollama did not accept the unload request."
+  request --request POST --header "Content-Type: application/json" --data "$payload" "$host/api/chat"
+  request_status=$?
+  if [[ "$request_status" -ne 0 ]]; then
+    if [[ "$request_status" -eq 63 ]]; then
+      result_error "response_too_large" "Ollama returned an oversized unload response."
+    else
+      result_error "transport_error" "Ollama did not accept the unload request."
+    fi
     exit 0
   fi
   if ! bounded_body; then
@@ -100,8 +106,14 @@ fi
 
 path="/api/ps"
 [[ "$operation" == "version" ]] && path="/api/version"
-if ! request "$host$path"; then
-  result_error "transport_error" "Cannot reach the configured Ollama endpoint. Start Ollama using your preferred setup."
+request "$host$path"
+request_status=$?
+if [[ "$request_status" -ne 0 ]]; then
+  if [[ "$request_status" -eq 63 ]]; then
+    result_error "response_too_large" "Ollama returned an oversized response."
+  else
+    result_error "transport_error" "Cannot reach the configured Ollama endpoint. Start Ollama using your preferred setup."
+  fi
   exit 0
 fi
 if ! bounded_body; then
@@ -128,17 +140,33 @@ else:
     if not isinstance(values, list):
         raise ValueError("missing models")
     models = []
-    for item in values[:12]:
+    aggregate_vram = 0.0
+    records = []
+    for item in values:
         if not isinstance(item, dict):
             continue
+        source_name = item.get("name") if isinstance(item.get("name"), str) else item.get("model")
+        if not isinstance(source_name, str) or not source_name:
+            continue
+        records.append((item, source_name))
+        value = item.get("size_vram")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0:
+            candidate = aggregate_vram + value
+            if math.isfinite(candidate):
+                aggregate_vram = candidate
+    for item, source_name in records[:12]:
         clean = {}
         for key in ("name", "model", "expires_at"):
             if isinstance(item.get(key), str):
                 clean[key] = item[key][:512]
+        # action_id is never derived from the display-safe, potentially sliced
+        # name above. Its value is the original API identifier or absent.
+        if len(source_name) <= 256:
+            clean["action_id"] = source_name
         for key in ("size", "size_vram", "context_length"):
             value = item.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
                 clean[key] = value
         models.append(clean)
-    print(json.dumps({"ok": True, "operation": "status", "data": {"models": models}}, separators=(",", ":")))
+    print(json.dumps({"ok": True, "operation": "status", "data": {"models": models, "loadedModelCount": len(records), "aggregateVramBytes": aggregate_vram}}, separators=(",", ":")))
 PY

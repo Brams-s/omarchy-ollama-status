@@ -91,6 +91,8 @@ case "${MOCK_MODE:-status-ok}" in
   version-ok) printf '%s\n' '{"version":"0.12.0"}' ;;
   malformed) printf '%s\n' '{not json' ;;
   oversized) python3 -c 'print("x" * 65537)' ;;
+  oversized-curl) exit 63 ;;
+  overlong-name) python3 -c 'import json; print(json.dumps({"models": [{"name": "x" * 257}, None, {"size_vram": 5}]}))' ;;
   unload-ok) printf '%s\n' '{"done":true}' ;;
   unload-api-error) printf '%s\n' '{"error":"untrusted raw API body must not be displayed"}' ;;
   *) exit 22 ;;
@@ -110,7 +112,7 @@ test ! -e "$tmpdir/curl-args"
 # curl starts with -q and explicitly disables proxy use before contacting a
 # literal loopback endpoint, isolating user curl config and proxy variables.
 result=$(run_mock status-ok status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["ok"] is True and value["data"]["models"][0]["name"] == "safe-model"' <<< "$result"
+python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["ok"] is True and value["data"]["models"][0]["name"] == "safe-model" and value["data"]["loadedModelCount"] == 1 and value["data"]["aggregateVramBytes"] == 5' <<< "$result"
 python3 - "$tmpdir/curl-args" <<'PY'
 import sys
 args = open(sys.argv[1]).read().splitlines()
@@ -126,6 +128,10 @@ result=$(run_mock malformed status)
 python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "invalid_data"' <<< "$result"
 result=$(run_mock oversized status)
 python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "response_too_large"' <<< "$result"
+result=$(run_mock oversized-curl status)
+python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "response_too_large"' <<< "$result"
+result=$(run_mock overlong-name status)
+python3 -c 'import json, sys; value=json.load(sys.stdin); model=value["data"]["models"][0]; assert len(model["name"]) == 257 and "action_id" not in model and value["data"]["loadedModelCount"] == 1' <<< "$result"
 
 # Unload uses non-streaming /api/chat with the documented keep_alive release.
 result=$(run_mock unload-ok unload "safe-model")

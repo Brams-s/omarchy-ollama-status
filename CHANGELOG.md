@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-09-02
+
+### Fixed
+- Kept exact canonical model identities for copy and unload actions separate from safe display labels; unsafe or overlong identities are non-actionable.
+- Preserved global loaded-model count and aggregate VRAM independently of the rendered-model limit.
+- Classified curl oversized-response exit status correctly instead of reporting it as a transport failure.
+- Bounded and hardened clipboard writes with timeout and explicit plain-text MIME handling.
+
 ## [1.3.0] — 2026-09-02
 
 ### Added

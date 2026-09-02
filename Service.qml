@@ -9,6 +9,10 @@ Item {
   property var shell: null
   property string state: "checking"
   property var models: []
+  // Aggregate metadata is intentionally independent of the rendered model
+  // limit. Panel.qml can adopt these fields without another API request.
+  property int loadedModelCount: 0
+  property double aggregateVramBytes: 0
   property string errorText: ""
   property string apiVersion: ""
   property string versionError: ""
@@ -99,8 +103,16 @@ Item {
   }
 
   function unload(name) {
-    var model = OllamaModel.plainText(name, 160)
-    if (busy || action.running || !model) return false
+    if (busy || action.running || typeof name !== "string") return false
+    var model = ""
+    for (var i = 0; i < models.length; i++) {
+      var item = models[i]
+      if (item && item.actionable === true && item.modelId === name) {
+        model = item.modelId
+        break
+      }
+    }
+    if (model === "") return false
     busy = true
     pendingModel = model
     errorText = ""
@@ -128,6 +140,8 @@ Item {
     var result = OllamaModel.parseResult(output, "status")
     if (result.ok !== true) {
       models = []
+      loadedModelCount = 0
+      aggregateVramBytes = 0
       state = "unavailable"
       errorText = OllamaModel.errorFor(result, "Ollama status request failed.")
       localApiStatus = "unavailable"
@@ -138,6 +152,8 @@ Item {
     }
     var next = OllamaModel.parseStatus(result, maxDisplayedModels)
     models = next.models
+    loadedModelCount = next.loadedModelCount
+    aggregateVramBytes = next.aggregateVramBytes
     state = next.state
     errorText = next.error
     localApiStatus = next.state === "unavailable" ? "unavailable" : "available"
