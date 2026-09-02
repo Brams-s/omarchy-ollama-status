@@ -2,6 +2,10 @@
 
 A standalone Omarchy bar widget showing the local Ollama API state and models held in memory. It uses Ollama's documented `GET /api/ps` endpoint rather than parsing command-line output.
 
+## Compatibility
+
+Built for Omarchy's Quattro/Quickshell bar plugin host, using its shared third-party service and standard panel lifecycle APIs.
+
 ## Preview
 
 ![Ollama Status popup showing that no model is loaded and it is ready for the next prompt](assets/ollama-status-idle.png)
@@ -20,13 +24,13 @@ A standalone Omarchy bar widget showing the local Ollama API state and models he
 
 The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` may only be a literal loopback endpoint (`127.x.x.x` or `[::1]`, with an optional port); hostnames and remote addresses are rejected. Requests ignore curl configuration and proxies.
 
-## Behaviour
+## Behaviour and controls
 
 - One shared service refreshes at startup, when any card opens, and every 15 seconds by default; unavailable endpoints use a bounded backoff.
 - Clearly reports a missing `curl`, an unreachable server, invalid API data, and failed unload requests.
 - Does not start or stop a service: that policy belongs to your setup.
 - **Unload** sends Ollama's documented non-streaming chat request with `messages: []` and `keep_alive: 0`. Only one unload can run at a time.
-- Open the widget to refresh. In the panel, use **R** to refresh, **Esc** to close, arrow keys to select a loaded model, and **Enter** twice (or click twice) to confirm unloading it.
+- Open the widget to refresh. In the panel, use **R** to refresh, **Esc** to close, arrow keys to select a loaded model, and **Enter** twice (or click twice) to confirm unloading it. These controls follow the standard Omarchy panel lifecycle and keyboard navigation behavior.
 
 ## Configuration
 
@@ -34,8 +38,13 @@ Configure each bar-widget entry with **Refresh interval (seconds)** (5–300, de
 
 ## Local checks
 
-Run `./verify.sh` from this directory. It validates the manifest, helper sanitization, shell syntax, loopback-only endpoint policy, curl isolation, bounded response handling, and unload request behavior without contacting Ollama.
+Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, shell syntax, loopback-only endpoint policy, curl isolation, bounded response handling, and unload request behavior without contacting Ollama. Runtime QML behavior is verified locally in an Omarchy/Quattro session; CI runs `qmllint` only when it is already available and never installs QML dependencies.
 
 ## Removal
 
-Disable the plugin with `omarchy plugin disable brams.ollama-status`, then remove it from your Omarchy plugins directory.
+Disable and remove the plugin with:
+
+```bash
+omarchy plugin disable brams.ollama-status
+rm -rf ~/.config/omarchy/plugins/brams.ollama-status
+```

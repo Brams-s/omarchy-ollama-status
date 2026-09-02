@@ -1,0 +1,33 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deterministic verification
+        run: ./verify.sh
+      - name: Bash syntax
+        run: bash -n status.sh verify.sh
+      - name: Node helper tests
+        run: node ./test-model.js
+      - name: Validate plugin manifest when Omarchy is available
+        run: |
+          if command -v omarchy >/dev/null 2>&1; then
+            omarchy plugin validate .
+          else
+            echo "omarchy is unavailable; verify.sh still validates manifest JSON and release metadata"
+          fi
+      - name: Lint QML when qmllint is available
+        run: |
+          if command -v qmllint >/dev/null 2>&1; then
+            qmllint BarWidget.qml Panel.qml Service.qml
+          else
+            echo "qmllint is unavailable; no QML dependencies are installed by CI"
+          fi
+      - name: Check diff whitespace
+        run: git diff --check

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "brams.ollama-status",
   "name": "Ollama Status",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "author": "brams",
   "license": "MIT",
   "description": "Ollama API status and loaded models for the Omarchy bar",

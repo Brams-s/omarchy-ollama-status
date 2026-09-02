@@ -5,7 +5,9 @@ cd "$(dirname "$0")"
 python3 -m json.tool manifest.json >/dev/null
 python3 - <<'PY'
 import json
+from pathlib import Path
 manifest = json.load(open("manifest.json"))
+assert manifest["version"] == "1.2.0"
 assert manifest["keepLoaded"] is True
 assert {"service", "bar-widget"}.issubset(manifest["kinds"])
 assert manifest["entryPoints"]["service"] == "Service.qml"
@@ -23,6 +25,12 @@ assert "configuredServiceSource" in bar_source and "unconfigure(configuredServic
 service_source = open("Service.qml").read()
 assert "lastRefreshCompletedMs" in service_source and "lastRefreshSucceeded" in service_source
 assert "versionErrorKind" in service_source and "models = models.slice(0, maxDisplayedModels)" in service_source
+readme = Path("README.md").read_text()
+changelog = Path("CHANGELOG.md").read_text()
+preview = Path("assets/ollama-status-idle.png")
+assert f"## [{manifest['version']}] — 2026-09-02" in changelog
+assert "](assets/ollama-status-idle.png)" in readme
+assert preview.is_file() and preview.stat().st_size > 0
 PY
 bash -n status.sh
 
