@@ -31,6 +31,36 @@ preview = Path("preview.png")
 assert f"## [{manifest['version']}] — 2026-09-02" in changelog
 assert "](preview.png)" in readme
 assert preview.is_file() and preview.stat().st_size > 0
+helper = Path("ci/qml-validate.sh")
+workflow = Path(".github/workflows/verify.yml")
+assert helper.is_file()
+assert workflow.is_file()
+helper_text = helper.read_text()
+assert "command -v quickshell" in helper_text
+assert "OMARCHY_SHELL_ROOT" in helper_text
+assert '"$qmllint"' in helper_text and '-I "$import_root"' in helper_text
+assert "--import error" in helper_text
+assert "--missing-type error" in helper_text
+assert "--unresolved-type error" in helper_text
+assert "--max-warnings -1" in helper_text
+workflow_text = workflow.read_text()
+assert "ci/qml-validate.sh" in workflow_text
+assert "OMARCHY_SHELL_ROOT=/opt/omarchy/shell" in workflow_text
+assert "quickshell qt6-declarative" in workflow_text
+assert "qmllint is unavailable; no QML dependencies are installed by CI" not in workflow_text
+assert "ARCH_IMAGE: docker.io/library/archlinux@sha256:694da1fce635e3a14d90751941b08f02c500e8724682f7a00768e7152251ec34" in workflow_text
+assert "archlinux:base-devel@sha256:" not in workflow_text
+assert "ARCH_IMAGE_DATE: 2026-09-02" in workflow_text
+assert "ARCHIVE_DATE: 2026/09/02" in workflow_text
+assert "archive.archlinux.org/repos/${ARCHIVE_DATE}" in workflow_text
+assert "fetch-depth: 0" in workflow_text
+assert "./ci/check-whitespace.sh" in workflow_text
+whitespace_helper = Path("ci/check-whitespace.sh")
+assert whitespace_helper.is_file()
+whitespace_text = whitespace_helper.read_text()
+assert '"$base...$head"' in whitespace_text
+assert '"$before" "$head"' in whitespace_text
+assert "empty_tree" in whitespace_text
 PY
 bash -n status.sh
 

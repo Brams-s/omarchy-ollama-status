@@ -38,13 +38,14 @@ Configure each bar-widget entry with **Refresh interval (seconds)** (5–300, de
 
 ## Local checks
 
-Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, shell syntax, loopback-only endpoint policy, curl isolation, bounded response handling, and unload request behavior without contacting Ollama. Runtime QML behavior is verified locally in an Omarchy/Quattro session; CI runs `qmllint` only when it is already available and never installs QML dependencies.
+Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, shell syntax, loopback-only endpoint policy, curl isolation, bounded response handling, and unload request behavior without contacting Ollama.
+
+CI performs non-conditional static QML validation in an immutable Arch container with Qt, Quickshell, and a pinned Omarchy Quattro shell import tree. It uses the digest-only official `docker.io/library/archlinux@sha256:694da1fce635e3a14d90751941b08f02c500e8724682f7a00768e7152251ec34` reference plus one matching dated Arch Archive epoch for all CI packages, then logs the image date/digest, archive epoch, package URLs, and installed tool versions. The QML policy fails on `import`, `missing-type`, and `unresolved-type` diagnostics; other diagnostics remain visible but nonfatal because Omarchy injects runtime bar and panel objects that static type inference cannot fully describe. To run the same import-aware lint locally, provide a matching shell tree and run `OMARCHY_SHELL_ROOT=/path/to/omarchy/shell ./ci/qml-validate.sh`. This is static import/type validation only: manually verify panel behavior in a local Omarchy/Quattro compositor session; CI does not start Hyprland or a graphical Quickshell runtime.
 
 ## Removal
 
-Disable and remove the plugin with:
+Remove the plugin with the canonical Omarchy command:
 
 ```bash
-omarchy plugin disable brams.ollama-status
-rm -rf ~/.config/omarchy/plugins/brams.ollama-status
+omarchy plugin remove brams.ollama-status
 ```

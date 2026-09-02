@@ -5,14 +5,16 @@ on:
   pull_request:
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  deterministic:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
       - name: Deterministic verification
         run: ./verify.sh
       - name: Bash syntax
-        run: bash -n status.sh verify.sh
+        run: bash -n status.sh verify.sh ci/qml-validate.sh ci/check-whitespace.sh
       - name: Node helper tests
         run: node ./test-model.js
       - name: Validate plugin manifest when Omarchy is available
@@ -20,14 +22,59 @@ jobs:
           if command -v omarchy >/dev/null 2>&1; then
             omarchy plugin validate .
           else
-            echo "omarchy is unavailable; verify.sh still validates manifest JSON and release metadata"
-          fi
-      - name: Lint QML when qmllint is available
-        run: |
-          if command -v qmllint >/dev/null 2>&1; then
-            qmllint BarWidget.qml Panel.qml Service.qml
-          else
-            echo "qmllint is unavailable; no QML dependencies are installed by CI"
+            echo "omarchy is unavailable; verify.sh validates manifest JSON and release metadata"
           fi
       - name: Check diff whitespace
-        run: git diff --check
+        env:
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_EVENT_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_EVENT_PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./ci/check-whitespace.sh
+
+  qml:
+    name: QML imports and lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Provision Quickshell, Qt, and the pinned Omarchy Quattro imports
+        env:
+          # This is the verified Quattro tree revision, not a moving branch.
+          OMARCHY_REV: 95ffbc41a6d5d5356c217e503b51f3f7c3bd80f1
+          # Official image digest resolved on this matching Archive epoch.
+          ARCH_IMAGE: docker.io/library/archlinux@sha256:694da1fce635e3a14d90751941b08f02c500e8724682f7a00768e7152251ec34
+          ARCH_IMAGE_DATE: 2026-09-02
+          ARCHIVE_DATE: 2026/09/02
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace:ro" \
+            --workdir /workspace \
+            --env OMARCHY_REV \
+            --env ARCHIVE_DATE \
+            --env ARCH_IMAGE \
+            --env ARCH_IMAGE_DATE \
+            "$ARCH_IMAGE" \
+            /bin/bash -euo pipefail -c '
+              archive="https://archive.archlinux.org/repos/${ARCHIVE_DATE}/\$repo/os/\$arch"
+              printf "Server = %s\n" "$archive" > /etc/pacman.d/mirrorlist
+              test "$(wc -l < /etc/pacman.d/mirrorlist)" -eq 1
+              pacman -Syy --noconfirm
+              mapfile -t package_urls < <(pacman -Sp git quickshell qt6-declarative)
+              test "${#package_urls[@]}" -gt 0
+              for url in "${package_urls[@]}"; do
+                [[ "$url" == "https://archive.archlinux.org/repos/${ARCHIVE_DATE}/"* ]] || { printf "Non-archive package URL: %s\n" "$url" >&2; exit 1; }
+              done
+              printf "Arch image: %s\nImage date: %s\nArchive epoch: %s\n" "$ARCH_IMAGE" "$ARCH_IMAGE_DATE" "$ARCHIVE_DATE"
+              printf "%s\n" "${package_urls[@]}"
+              pacman -S --noconfirm --needed git quickshell qt6-declarative
+              pacman -Q git quickshell qt6-declarative
+              quickshell --version
+              if command -v qmllint >/dev/null 2>&1; then lint=$(command -v qmllint); elif [[ -x /usr/lib/qt6/bin/qmllint ]]; then lint=/usr/lib/qt6/bin/qmllint; else printf "qmllint was not installed by qt6-declarative.\n" >&2; exit 1; fi
+              "$lint" --version
+              git clone https://github.com/omarchy-mac/omarchy-mac.git /opt/omarchy
+              git -C /opt/omarchy checkout --detach "$OMARCHY_REV"
+              test -f /opt/omarchy/shell/Ui/qmldir
+              test -f /opt/omarchy/shell/Commons/qmldir
+              OMARCHY_SHELL_ROOT=/opt/omarchy/shell QMLLINT="$lint" ./ci/qml-validate.sh
+            '
