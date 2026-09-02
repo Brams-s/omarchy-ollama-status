@@ -13,16 +13,64 @@ Panel {
   property var anchorItem: null
   property var hostWidget: null
   property var ollamaService: null
+  // BarWidget forwards bounded effective settings here so any future panel
+  // behavior uses the same per-widget configuration as the shared service.
+  property var effectiveSettings: ({})
   property int selectedIndex: -1
   property bool confirmUnload: false
   property string confirmedModelName: ""
+  property double nowMs: Date.now()
   readonly property var barIdentity: hostWidget || root
   readonly property var models: ollamaService && Array.isArray(ollamaService.models) ? ollamaService.models : []
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property double lastSuccessfulRefreshMs: ollamaService ? Number(ollamaService.lastSuccessfulRefreshMs || 0) : 0
+  readonly property double lastRefreshCompletedMs: ollamaService ? Number(ollamaService.lastRefreshCompletedMs || 0) : 0
+  readonly property bool lastRefreshSucceeded: ollamaService ? ollamaService.lastRefreshSucceeded === true : false
+  readonly property bool refreshing: ollamaService ? ollamaService.refreshing === true : false
+  readonly property int configuredRefreshSec: boundedSetting(effectiveSettings.refreshIntervalSec, 15, 5, 300)
+  readonly property int configuredModelLimit: boundedSetting(effectiveSettings.maxDisplayedModels, 12, 1, 12)
 
   function plain(value, limit) { return OllamaModel.plainText(value, limit) }
-  function refreshNow() { if (ollamaService) ollamaService.refresh() }
+  function boundedSetting(value, fallback, minimum, maximum) {
+    value = Number(value)
+    if (!isFinite(value)) value = fallback
+    return Math.max(minimum, Math.min(maximum, Math.floor(value)))
+  }
+  function refreshNow() {
+    if (ollamaService) ollamaService.refresh()
+  }
+  function refreshFeedback() {
+    if (refreshing) return "Refreshing…"
+    if (lastRefreshCompletedMs > 0 && nowMs - lastRefreshCompletedMs < 4000)
+      return lastRefreshSucceeded ? "Refresh complete" : "Refresh failed"
+    return ""
+  }
+  function refreshAge() {
+    if (!isFinite(lastSuccessfulRefreshMs) || lastSuccessfulRefreshMs <= 0) return "No successful refresh yet"
+    var seconds = Math.max(0, Math.floor((nowMs - lastSuccessfulRefreshMs) / 1000))
+    if (seconds < 10) return "Updated just now"
+    if (seconds < 60) return "Updated " + seconds + "s ago"
+    if (seconds < 3600) return "Updated " + Math.ceil(seconds / 60) + "m ago"
+    return "Updated " + Math.ceil(seconds / 3600) + "h ago"
+  }
+  function statusFailure() {
+    if (!ollamaService || ollamaService.localApiStatus !== "unavailable") return ""
+    var kind = plain(ollamaService.statusErrorKind, 80)
+    if (kind === "missing_python3") return "Local status check needs Python 3"
+    if (kind === "missing_curl") return "Local status check needs curl"
+    if (kind === "invalid_data") return "Local API returned invalid data"
+    if (kind === "response_too_large") return "Local API response was too large"
+    return "Local API is unavailable"
+  }
+  function versionFailure() {
+    if (!ollamaService || plain(ollamaService.versionError, 300) === "") return ""
+    var kind = plain(ollamaService.versionErrorKind, 80)
+    if (kind === "missing_python3") return "Version check needs Python 3"
+    if (kind === "missing_curl") return "Version check needs curl"
+    if (kind === "invalid_data") return "Version check returned invalid data"
+    return "Version check unavailable"
+  }
   function switchPanel(direction) {
     if (bar && typeof bar.switchPanelFrom === "function") bar.switchPanelFrom(barIdentity, direction)
   }
@@ -75,6 +123,7 @@ Panel {
   }
 
   onOpenedChanged: if (opened) {
+    nowMs = Date.now()
     refreshNow()
     selectedIndex = models.length > 0 ? 0 : -1
     clearUnloadConfirmation()
@@ -88,6 +137,13 @@ Panel {
   onSelectedIndexChanged: {
     if (confirmedModelName !== "" && modelNameAt(selectedIndex) !== confirmedModelName) clearUnloadConfirmation()
     Qt.callLater(ensureSelectedVisible)
+  }
+
+  Timer {
+    interval: 1000
+    running: root.opened
+    repeat: true
+    onTriggered: root.nowMs = Date.now()
   }
 
   KeyboardPanel {
@@ -148,6 +204,33 @@ Panel {
             Text { id: titleIcon; visible: false; text: "\uef3d" }
           }
 
+          Item {
+            id: refreshControl
+            width: parent.width
+            height: Style.space(30)
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.space(7)
+              color: refreshMouse.containsMouse
+                ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16)
+                : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+            }
+            Row {
+              anchors.centerIn: parent
+              spacing: Style.space(6)
+              Text { text: "↻"; color: Color.accent; font.pixelSize: Style.font.body; textFormat: Text.PlainText }
+              Text { text: root.refreshing ? "Refreshing…" : root.ollamaService && root.ollamaService.busy ? "Busy — retry shortly" : "Refresh status"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { text: "R"; color: root.foreground; opacity: .6; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+            }
+            MouseArea {
+              id: refreshMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.refreshNow()
+            }
+          }
+
           Rectangle {
             width: parent.width
             implicitHeight: summary.implicitHeight + Style.space(20)
@@ -162,6 +245,25 @@ Panel {
               Text { visible: root.ollamaService && root.ollamaService.state === "unavailable"; text: "Ollama API unavailable\nCheck that Ollama is running and reachable."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
               Text { visible: root.ollamaService && (root.ollamaService.state === "idle" || (root.ollamaService.state === "loaded" && root.models.length === 0)); text: "No model loaded\nReady for your next prompt."; color: root.foreground; font.pixelSize: Style.font.bodySmall; lineHeight: 1.2; textFormat: Text.PlainText }
               Text { visible: root.models.length > 0; text: root.models.length + " model" + (root.models.length === 1 ? "" : "s") + " held in memory"; color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+            }
+          }
+
+          Rectangle {
+            width: parent.width
+            implicitHeight: diagnostics.implicitHeight + Style.space(18)
+            radius: Style.space(8)
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.035)
+            Column {
+              id: diagnostics
+              anchors.fill: parent
+              anchors.margins: Style.space(9)
+              spacing: Style.space(3)
+              Text { text: "LOCAL DIAGNOSTICS"; color: root.foreground; opacity: .58; font.pixelSize: Style.font.bodySmall; font.bold: true; textFormat: Text.PlainText }
+              Text { text: "API · " + (root.ollamaService && root.ollamaService.localApiStatus === "available" ? "Available" : root.ollamaService && root.ollamaService.localApiStatus === "checking" ? "Checking" : "Unavailable"); color: root.foreground; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.ollamaService && root.ollamaService.apiVersion !== ""; text: "Version · v" + root.plain(root.ollamaService.apiVersion, 80); color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { text: root.refreshAge() + " · every " + root.configuredRefreshSec + "s · up to " + root.configuredModelLimit + " models"; color: root.foreground; opacity: .7; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.statusFailure() !== ""; text: root.statusFailure(); color: root.urgent; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+              Text { visible: root.versionFailure() !== ""; text: root.versionFailure(); color: root.urgent; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
             }
           }
 
@@ -218,7 +320,7 @@ Panel {
           }
 
           Text { visible: root.ollamaService && root.ollamaService.errorText !== ""; width: parent.width; text: root.plain(root.ollamaService.errorText, 300); color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
-          Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+          Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.refreshFeedback() !== "" ? root.refreshFeedback() : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
         }
       }
     }

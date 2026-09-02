@@ -22,11 +22,15 @@ The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` may only be a li
 
 ## Behaviour
 
-- One shared service refreshes at startup, when any card opens, and every 15 seconds; unavailable endpoints use a bounded backoff.
+- One shared service refreshes at startup, when any card opens, and every 15 seconds by default; unavailable endpoints use a bounded backoff.
 - Clearly reports a missing `curl`, an unreachable server, invalid API data, and failed unload requests.
 - Does not start or stop a service: that policy belongs to your setup.
 - **Unload** sends Ollama's documented non-streaming chat request with `messages: []` and `keep_alive: 0`. Only one unload can run at a time.
 - Open the widget to refresh. In the panel, use **R** to refresh, **Esc** to close, arrow keys to select a loaded model, and **Enter** twice (or click twice) to confirm unloading it.
+
+## Configuration
+
+Configure each bar-widget entry with **Refresh interval (seconds)** (5–300, default 15), **Maximum displayed models** (1–12, default 12), and **Compact mode** (default off). Compact mode shortens the horizontal bar label while retaining the model or availability state; vertical bars remain icon-first. The kept-loaded service validates these bounds and uses one stable effective configuration across monitor instances.
 
 ## Local checks
 

@@ -10,6 +10,19 @@ assert manifest["keepLoaded"] is True
 assert {"service", "bar-widget"}.issubset(manifest["kinds"])
 assert manifest["entryPoints"]["service"] == "Service.qml"
 assert "settingsSchema" not in manifest
+widget = manifest["barWidget"]
+assert widget["defaults"] == {"refreshIntervalSec": 15, "maxDisplayedModels": 12, "compactMode": False}
+schema = {item["key"]: item for item in widget["schema"]}
+assert schema["refreshIntervalSec"]["type"] == "integer" and schema["refreshIntervalSec"]["min"] == 5 and schema["refreshIntervalSec"]["max"] == 300
+assert schema["maxDisplayedModels"]["type"] == "integer" and schema["maxDisplayedModels"]["min"] == 1 and schema["maxDisplayedModels"]["max"] == 12
+assert schema["compactMode"]["type"] == "boolean"
+bar_source = open("BarWidget.qml").read()
+assert "String(root)" not in bar_source
+assert "moduleSlots" in bar_source and "slotWindow(slot)" in bar_source
+assert "configuredServiceSource" in bar_source and "unconfigure(configuredServiceSource)" in bar_source
+service_source = open("Service.qml").read()
+assert "lastRefreshCompletedMs" in service_source and "lastRefreshSucceeded" in service_source
+assert "versionErrorKind" in service_source and "models = models.slice(0, maxDisplayedModels)" in service_source
 PY
 bash -n status.sh
 
