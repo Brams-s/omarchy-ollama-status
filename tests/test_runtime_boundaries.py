@@ -24,6 +24,15 @@ def load_helper():
     return module
 
 
+def is_gone_or_zombie(pid):
+    """A proc entry may disappear between lookup and read after a kill."""
+    try:
+        status = Path(f"/proc/{pid}/stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    return status.split()[2] == "Z"
+
+
 class RuntimeBoundaryTests(unittest.TestCase):
     def test_cli_does_not_resolve_curl_from_path(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -198,8 +207,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 supervisor.wait(timeout=1)
                 deadline = time.monotonic() + 0.5
                 while time.monotonic() < deadline:
-                    status_path = Path(f"/proc/{child_pid}/stat")
-                    if not status_path.exists() or status_path.read_text().split()[2] == "Z":
+                    if is_gone_or_zombie(child_pid):
                         break
                     time.sleep(0.01)
                 else:
@@ -247,8 +255,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 if child_group is not None:
                     deadline = time.monotonic() + 0.5
                     while time.monotonic() < deadline:
-                        status_path = Path(f"/proc/{child_pid}/stat")
-                        if not status_path.exists() or status_path.read_text().split()[2] == "Z":
+                        if is_gone_or_zombie(child_pid):
                             break
                         time.sleep(0.01)
                     else:
