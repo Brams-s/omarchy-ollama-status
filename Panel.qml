@@ -25,6 +25,12 @@ Panel {
   property double copyFeedbackUntilMs: 0
   property bool copyBusy: false
   property bool copyTimedOut: false
+  readonly property var clipboardEnvironment: ({
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    WAYLAND_DISPLAY: null,
+    XDG_RUNTIME_DIR: null
+  })
   readonly property var barIdentity: hostWidget || root
   readonly property var models: ollamaService && Array.isArray(ollamaService.models) ? ollamaService.models : []
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -84,10 +90,12 @@ Panel {
       setCopyFeedback(copyTimedOut ? "Clipboard is resetting" : "Copy already in progress")
       return
     }
-    // Direct wl-copy invocation keeps the canonical action value out of a
-    // shell and makes the timeout target the only child process.
-    copyProcess.command = ["wl-copy", "--type", "text/plain;charset=utf-8", "--", modelId]
+    // Normal wl-copy mode returns once it has established the selection. The
+    // short deadline below is only for this startup/setup step, not serving
+    // clipboard ownership after the request has completed.
+    copyProcess.command = ["/usr/bin/wl-copy", "--type", "text/plain;charset=utf-8", "--", modelId]
     copyBusy = true
+    copyTimeout.restart()
     copyProcess.running = true
     setCopyFeedback("Copying…")
   }
@@ -175,6 +183,16 @@ Panel {
       modelFlick.contentY = Math.max(0, Math.min(maximum, bottom + margin - modelFlick.height))
   }
 
+  function shutdownClipboard() {
+    copyTimeout.stop()
+    copyKill.stop()
+    if (copyProcess.running) {
+      copyProcess.signal(15)
+    }
+    copyBusy = false
+    copyTimedOut = false
+  }
+
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
     refreshNow()
@@ -202,25 +220,30 @@ Panel {
   Timer {
     id: copyTimeout
     interval: 3000
-    running: root.copyBusy
     repeat: false
     onTriggered: {
       if (!root.copyBusy) return
-      root.copyBusy = false
       root.copyTimedOut = true
-      copyProcess.signal(9)
-      root.setCopyFeedback("Clipboard timed out")
+      copyProcess.running = false
+      copyKill.restart()
+      root.setCopyFeedback("Clipboard setup timed out")
     }
   }
 
-  // Clipboard execution belongs to the panel interaction, not the shared API
-  // service. Output is collected only to complete the process safely; it is
-  // never displayed because command output is not user-facing model data.
+  Timer {
+    id: copyKill
+    interval: 250
+    repeat: false
+    onTriggered: if (copyProcess.running) copyProcess.signal(9)
+  }
+
+  // The fixed helper receives only the Wayland connection fields it needs.
+  // Both output channels remain closed, so helper output cannot allocate in QML.
   Process {
     id: copyProcess
     command: []
-    stdout: StdioCollector { waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
+    clearEnvironment: true
+    environment: root.clipboardEnvironment
     // A missing wl-copy may fail during process startup without emitting
     // exited. Defer this recovery so a normal exited handler always gets the
     // first chance to report its accurate zero/nonzero result.
@@ -229,14 +252,16 @@ Panel {
       if (root.copyBusy) {
         root.copyBusy = false
         copyTimeout.stop()
-        root.setCopyFeedback("Clipboard unavailable")
-      } else if (root.copyTimedOut) {
-        // Preserve timeout feedback even if the killed process never emits exited.
+        copyKill.stop()
+        if (!root.copyTimedOut) root.setCopyFeedback("Clipboard unavailable")
         root.copyTimedOut = false
       }
     })
     onExited: function(exitCode) {
+      copyTimeout.stop()
+      copyKill.stop()
       if (root.copyTimedOut) {
+        root.copyBusy = false
         root.copyTimedOut = false
         return
       }
@@ -246,6 +271,8 @@ Panel {
       else root.setCopyFeedback("Clipboard unavailable")
     }
   }
+
+  Component.onDestruction: root.shutdownClipboard()
 
   KeyboardPanel {
     id: panel

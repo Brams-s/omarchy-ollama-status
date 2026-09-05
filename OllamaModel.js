@@ -45,7 +45,7 @@ function modelFrom(value) {
   var displayName = plainText(sourceName, MAX_TEXT)
   if (!displayName) return null
   // The helper never reconstructs action identity from a display value. Only
-  // status.sh may provide action_id, preserving the original API identifier.
+  // ollama_status.py may provide action_id, preserving the original API identifier.
   var modelId = canonicalModelId(value.action_id)
   return {
     // name remains a compatibility alias for existing panel consumers. It is

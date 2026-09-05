@@ -30,7 +30,14 @@ Item {
   property bool busy: false
   property int failureCount: 0
   property string pendingModel: ""
-  readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl("status.sh").toString().replace(/^file:\/\//, ""))
+  property bool pendingRefresh: false
+  readonly property string pythonPath: "/usr/bin/python3"
+  readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl("ollama_status.py").toString().replace(/^file:\/\//, ""))
+  readonly property var processEnvironment: ({
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    OLLAMA_HOST: null
+  })
   property int refreshIntervalSec: 15
   property int maxDisplayedModels: 12
   property bool compactMode: false
@@ -94,10 +101,21 @@ Item {
   }
 
   function refresh() {
-    if (status.running || busy) return false
+    if (busy) return false
+    if (status.running) {
+      pendingRefresh = true
+      status.superseded = true
+      refreshing = true
+      terminate(status, statusKill)
+      return true
+    }
     status.outputText = ""
+    status.expected = true
+    status.timedOut = false
+    status.superseded = false
     refreshing = true
     lastRefreshStartedMs = Date.now()
+    statusDeadline.restart()
     status.running = true
     return true
   }
@@ -117,7 +135,10 @@ Item {
     pendingModel = model
     errorText = ""
     action.outputText = ""
-    action.command = ["bash", scriptPath, "unload", model]
+    action.expected = true
+    action.timedOut = false
+    action.command = [pythonPath, scriptPath, "unload", model]
+    actionDeadline.restart()
     action.running = true
     return true
   }
@@ -130,7 +151,7 @@ Item {
       if (message.indexOf("curl") !== -1) return "missing_curl"
       return "missing_dependency"
     }
-    var allowed = ["unsafe_endpoint", "transport_error", "response_too_large", "invalid_data", "invalid_request", "internal_error", "api_error"]
+    var allowed = ["unsafe_endpoint", "transport_error", "response_too_large", "operation_timeout", "invalid_data", "invalid_request", "internal_error", "api_error"]
     return allowed.indexOf(kind) !== -1 ? kind : fallback
   }
   function updateLastErrorKind() {
@@ -169,6 +190,9 @@ Item {
     failureCount = next.state === "unavailable" ? failureCount + 1 : 0
     if (next.state !== "unavailable" && apiVersion === "" && !version.running) {
       version.outputText = ""
+      version.expected = true
+      version.timedOut = false
+      versionDeadline.restart()
       version.running = true
     }
     return next.state !== "unavailable"
@@ -189,44 +213,147 @@ Item {
     }
   }
 
+  function recoverStatusStart() {
+    if (status.running || !status.expected) return
+    status.expected = false
+    var completedAt = Date.now()
+    var output = '{"ok":false,"operation":"status","kind":"missing_dependency","error":"Missing dependency: python3 is required to run Ollama Status."}'
+    lastRefreshSucceeded = applyStatus(output, completedAt)
+    lastRefreshCompletedMs = completedAt
+    refreshCompletionSerial += 1
+    refreshing = false
+    pollTimer.restart()
+    if (pendingRefresh) pendingRefresh = false
+  }
+
+  function recoverVersionStart() {
+    if (version.running || !version.expected) return
+    version.expected = false
+    applyVersion('{"ok":false,"operation":"version","kind":"missing_dependency","error":"Missing dependency: python3 is required to run Ollama Status."}')
+  }
+
+  function recoverActionStart() {
+    if (action.running || !action.expected) return
+    action.expected = false
+    errorText = "The unload helper could not start."
+    actionErrorKind = "missing_python3"
+    updateLastErrorKind()
+    busy = false
+    pendingModel = ""
+    refresh()
+  }
+
+  function terminate(process, killTimer) {
+    if (!process.running) return
+    process.terminating = true
+    process.running = false
+    killTimer.restart()
+  }
+
+  function destroyProcess(process) {
+    if (!process.running) return
+    process.signal(15)
+  }
+
+  function shutdown() {
+    pendingRefresh = false
+    pollTimer.stop()
+    statusDeadline.stop()
+    statusKill.stop()
+    versionDeadline.stop()
+    versionKill.stop()
+    actionDeadline.stop()
+    actionKill.stop()
+    destroyProcess(status)
+    destroyProcess(version)
+    destroyProcess(action)
+  }
+
   Process {
     id: status
-    command: ["bash", root.scriptPath, "status"]
+    command: [root.pythonPath, root.scriptPath, "status"]
+    clearEnvironment: true
+    environment: root.processEnvironment
     property string outputText: ""
+    property bool expected: false
+    property bool timedOut: false
+    property bool terminating: false
+    property bool superseded: false
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: function() { status.outputText = text }
     }
+    onRunningChanged: if (!running && expected) Qt.callLater(root.recoverStatusStart)
     onExited: function() {
-      var completedAt = Date.now()
-      root.lastRefreshSucceeded = root.applyStatus(status.outputText, completedAt)
-      root.lastRefreshCompletedMs = completedAt
-      root.refreshCompletionSerial += 1
-      root.refreshing = false
-      pollTimer.restart()
+      statusDeadline.stop()
+      statusKill.stop()
+      status.expected = false
+      status.terminating = false
+      var wasSuperseded = status.superseded
+      status.superseded = false
+      if (!wasSuperseded) {
+        if (status.timedOut) status.outputText = '{"ok":false,"operation":"status","kind":"operation_timeout","error":"The local Ollama request timed out."}'
+        var completedAt = Date.now()
+        root.lastRefreshSucceeded = root.applyStatus(status.outputText, completedAt)
+        root.lastRefreshCompletedMs = completedAt
+        root.refreshCompletionSerial += 1
+        root.refreshing = false
+        pollTimer.restart()
+      }
+      status.timedOut = false
+      if (pendingRefresh) {
+        pendingRefresh = false
+        Qt.callLater(function() { root.refresh() })
+      }
     }
   }
 
   Process {
     id: version
-    command: ["bash", root.scriptPath, "version"]
+    command: [root.pythonPath, root.scriptPath, "version"]
+    clearEnvironment: true
+    environment: root.processEnvironment
     property string outputText: ""
+    property bool expected: false
+    property bool timedOut: false
+    property bool terminating: false
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: function() { version.outputText = text }
     }
-    onExited: function() { root.applyVersion(version.outputText) }
+    onRunningChanged: if (!running && expected) Qt.callLater(root.recoverVersionStart)
+    onExited: function() {
+      versionDeadline.stop()
+      versionKill.stop()
+      version.expected = false
+      version.terminating = false
+      if (version.timedOut) version.outputText = '{"ok":false,"operation":"version","kind":"operation_timeout","error":"The local Ollama request timed out."}'
+      version.timedOut = false
+      root.applyVersion(version.outputText)
+    }
   }
 
   Process {
     id: action
     command: []
+    clearEnvironment: true
+    environment: root.processEnvironment
     property string outputText: ""
+    property bool expected: false
+    property bool timedOut: false
+    property bool terminating: false
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: function() { action.outputText = text }
     }
+    onRunningChanged: if (!running && expected) Qt.callLater(root.recoverActionStart)
     onExited: function() {
+      actionDeadline.stop()
+      actionKill.stop()
+      action.expected = false
+      action.terminating = false
+      if (action.timedOut) action.outputText = '{"ok":false,"operation":"unload","kind":"operation_timeout","error":"The local Ollama request timed out."}'
+      action.timedOut = false
       var result = OllamaModel.parseResult(action.outputText, "unload")
       if (result.ok !== true) {
         root.errorText = OllamaModel.errorFor(result, "The unload request failed.")
@@ -239,6 +366,13 @@ Item {
     }
   }
 
+  Timer { id: statusDeadline; interval: 5000; repeat: false; onTriggered: { status.timedOut = true; root.terminate(status, statusKill) } }
+  Timer { id: statusKill; interval: 750; repeat: false; onTriggered: if (status.running) status.signal(9) }
+  Timer { id: versionDeadline; interval: 5000; repeat: false; onTriggered: { version.timedOut = true; root.terminate(version, versionKill) } }
+  Timer { id: versionKill; interval: 750; repeat: false; onTriggered: if (version.running) version.signal(9) }
+  Timer { id: actionDeadline; interval: 5000; repeat: false; onTriggered: { action.timedOut = true; root.terminate(action, actionKill) } }
+  Timer { id: actionKill; interval: 750; repeat: false; onTriggered: if (action.running) action.signal(9) }
+
   Timer {
     id: pollTimer
     interval: root.nextPollInterval
@@ -247,4 +381,5 @@ Item {
   }
 
   Component.onCompleted: root.refresh()
+  Component.onDestruction: root.shutdown()
 }

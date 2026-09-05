@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+- Replaced the shell and temporary-response-file path with a fixed Python supervisor and bounded in-memory pipe.
+- Bound curl and clipboard helpers to absolute executable paths and minimal allowlisted environments.
+- Added whole-operation deadlines, output ceilings, refresh supersession, TERM-to-KILL cleanup, and destruction handling.
+
 ## [1.3.1] — 2026-09-02
 
 ### Fixed
