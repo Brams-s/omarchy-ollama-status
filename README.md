@@ -26,7 +26,7 @@ The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` may only be a li
 
 ## Behaviour and controls
 
-- One shared service refreshes at startup, when any card opens, and every 15 seconds by default; unavailable endpoints use a bounded backoff.
+- One shared service refreshes at startup, when any card opens, and every 15 seconds by default; unavailable endpoints use a bounded backoff. A newer manual refresh supersedes an in-flight status request.
 - Clearly reports a missing `curl`, an unreachable server, invalid API data, and failed unload requests.
 - Does not start or stop a service: that policy belongs to your setup.
 - **Unload** sends Ollama's documented non-streaming chat request with `messages: []` and `keep_alive: 0`. Only one unload can run at a time.
@@ -38,7 +38,7 @@ Configure each bar-widget entry with **Refresh interval (seconds)** (5–300, de
 
 ## Local checks
 
-Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, shell syntax, loopback-only endpoint policy, curl isolation, bounded response handling, and unload request behavior without contacting Ollama.
+Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, loopback-only endpoint policy, fixed executable identities, allowlisted child environments, whole-operation deadlines, bounded pipe/result handling, process cleanup, and unload request behavior without contacting Ollama.
 
 CI performs non-conditional static QML validation in an immutable Arch container with Qt, Quickshell, and a pinned Omarchy Quattro shell import tree. It uses the digest-only official `docker.io/library/archlinux@sha256:694da1fce635e3a14d90751941b08f02c500e8724682f7a00768e7152251ec34` reference plus one matching dated Arch Archive epoch for all CI packages, then logs the image date/digest, archive epoch, package URLs, and installed tool versions. The QML policy fails on `import`, `missing-type`, and `unresolved-type` diagnostics; other diagnostics remain visible but nonfatal because Omarchy injects runtime bar and panel objects that static type inference cannot fully describe. To run the same import-aware lint locally, provide a matching shell tree and run `OMARCHY_SHELL_ROOT=/path/to/omarchy/shell ./ci/qml-validate.sh`. This validates imports and static types only; manually verify clipboard, panel behavior, and all compositor/runtime interactions in a local Omarchy/Quattro session. CI does not start Hyprland or a graphical Quickshell runtime.
 

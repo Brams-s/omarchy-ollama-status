@@ -14,7 +14,7 @@ jobs:
       - name: Deterministic verification
         run: ./verify.sh
       - name: Bash syntax
-        run: bash -n status.sh verify.sh ci/qml-validate.sh ci/check-whitespace.sh
+        run: bash -n verify.sh ci/qml-validate.sh ci/check-whitespace.sh
       - name: Node helper tests
         run: node ./test-model.js
       - name: Validate plugin manifest when Omarchy is available

@@ -67,7 +67,6 @@ assert '"$base...$head"' in whitespace_text
 assert '"$before" "$head"' in whitespace_text
 assert "empty_tree" in whitespace_text
 PY
-bash -n status.sh
 
 if command -v node >/dev/null 2>&1; then
   node ./test-model.js
@@ -75,76 +74,6 @@ else
   printf '%s\n' 'ollama-status: node unavailable; skipped helper tests'
 fi
 
-# A PATH without curl must still produce one valid structured error and exit cleanly.
-result=$(PATH="/nonexistent" /usr/bin/bash ./status.sh)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["ok"] is False and value["kind"] == "missing_dependency"' <<< "$result"
-
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-mkdir "$tmpdir/bin"
-cat > "$tmpdir/bin/curl" <<'EOF'
-#!/usr/bin/bash
-set -eu
-printf '%s\n' "$@" > "$MOCK_CURL_ARGS"
-case "${MOCK_MODE:-status-ok}" in
-  status-ok) printf '%s\n' '{"models":[{"name":"safe-model","size":10,"size_vram":5,"context_length":4096}]}' ;;
-  version-ok) printf '%s\n' '{"version":"0.12.0"}' ;;
-  malformed) printf '%s\n' '{not json' ;;
-  oversized) python3 -c 'print("x" * 65537)' ;;
-  oversized-curl) exit 63 ;;
-  overlong-name) python3 -c 'import json; print(json.dumps({"models": [{"name": "x" * 257}, None, {"size_vram": 5}]}))' ;;
-  unload-ok) printf '%s\n' '{"done":true}' ;;
-  unload-api-error) printf '%s\n' '{"error":"untrusted raw API body must not be displayed"}' ;;
-  *) exit 22 ;;
-esac
-EOF
-chmod +x "$tmpdir/bin/curl"
-
-run_mock() {
-  MOCK_CURL_ARGS="$tmpdir/curl-args" MOCK_MODE="$1" PATH="$tmpdir/bin:$PATH" /usr/bin/bash ./status.sh "${@:2}"
-}
-
-# Non-loopback hosts are rejected before curl can be invoked.
-result=$(MOCK_CURL_ARGS="$tmpdir/curl-args" MOCK_MODE=status-ok PATH="$tmpdir/bin:$PATH" OLLAMA_HOST="https://example.com" /usr/bin/bash ./status.sh)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "unsafe_endpoint"' <<< "$result"
-test ! -e "$tmpdir/curl-args"
-
-# curl starts with -q and explicitly disables proxy use before contacting a
-# literal loopback endpoint, isolating user curl config and proxy variables.
-result=$(run_mock status-ok status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["ok"] is True and value["data"]["models"][0]["name"] == "safe-model" and value["data"]["loadedModelCount"] == 1 and value["data"]["aggregateVramBytes"] == 5' <<< "$result"
-python3 - "$tmpdir/curl-args" <<'PY'
-import sys
-args = open(sys.argv[1]).read().splitlines()
-assert args[:3] == ["-q", "--noproxy", "*"]
-assert args[-1].endswith("/api/ps")
-PY
-
-result=$(run_mock version-ok version)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value == {"ok": True, "operation": "version", "data": {"version": "0.12.0"}}' <<< "$result"
-
-# Bad and oversized bodies are classified without reflecting their contents.
-result=$(run_mock malformed status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "invalid_data"' <<< "$result"
-result=$(run_mock oversized status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "response_too_large"' <<< "$result"
-result=$(run_mock oversized-curl status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "response_too_large"' <<< "$result"
-result=$(run_mock overlong-name status)
-python3 -c 'import json, sys; value=json.load(sys.stdin); model=value["data"]["models"][0]; assert len(model["name"]) == 257 and "action_id" not in model and value["data"]["loadedModelCount"] == 1' <<< "$result"
-
-# Unload uses non-streaming /api/chat with the documented keep_alive release.
-result=$(run_mock unload-ok unload "safe-model")
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value == {"ok": True, "operation": "unload", "data": {"done": True}}' <<< "$result"
-python3 - "$tmpdir/curl-args" <<'PY'
-import json, sys
-args = open(sys.argv[1]).read().splitlines()
-assert args[:3] == ["-q", "--noproxy", "*"]
-assert args[-1].endswith("/api/chat")
-payload = json.loads(args[args.index("--data") + 1])
-assert payload == {"model": "safe-model", "messages": [], "keep_alive": 0, "stream": False}
-PY
-result=$(run_mock unload-api-error unload "safe-model")
-python3 -c 'import json, sys; value=json.load(sys.stdin); assert value["kind"] == "api_error" and "untrusted" not in value["error"]' <<< "$result"
+/usr/bin/python3 -m unittest -v tests.test_runtime_boundaries
 
 printf '%s\n' 'ollama-status: static checks passed'
