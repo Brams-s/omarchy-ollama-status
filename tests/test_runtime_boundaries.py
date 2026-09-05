@@ -444,10 +444,11 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertIn("function recoverVersionStart()", source)
         self.assertIn("function recoverActionStart()", source)
 
-    def test_clipboard_helper_has_fixed_identity_minimal_environment_and_cleanup(self):
+    def test_clipboard_helper_has_fixed_identity_and_bounded_setup_only(self):
         source = (ROOT / "Panel.qml").read_text()
 
-        self.assertIn('["/usr/bin/wl-copy", "--foreground",', source)
+        self.assertIn('["/usr/bin/wl-copy", "--type", "text/plain;charset=utf-8", "--", modelId]', source)
+        self.assertNotIn("--foreground", source)
         self.assertIn("clearEnvironment: true", source)
         self.assertIn("environment: root.clipboardEnvironment", source)
         self.assertNotIn("stdout: StdioCollector", source)
@@ -455,6 +456,9 @@ class RuntimeBoundaryTests(unittest.TestCase):
         self.assertIn("id: copyKill", source)
         self.assertIn("copyProcess.running = false", source)
         self.assertIn("copyProcess.signal(9)", source)
+        self.assertIn("copyTimeout.restart()\n    copyProcess.running = true", source)
+        self.assertIn("Clipboard setup timed out", source)
+        self.assertNotIn("clipboard-serving process", source)
         self.assertIn("Component.onDestruction: root.shutdownClipboard()", source)
 
     def test_runtime_path_uses_bounded_pipes_without_temporary_files(self):

@@ -30,7 +30,7 @@ The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` may only be a li
 - Clearly reports a missing `curl`, an unreachable server, invalid API data, and failed unload requests.
 - Does not start or stop a service: that policy belongs to your setup.
 - **Unload** sends Ollama's documented non-streaming chat request with `messages: []` and `keep_alive: 0`. Only one unload can run at a time.
-- Open the widget to refresh. In the panel, use **R** to refresh, **C** to copy the selected model’s canonical name to the Wayland clipboard, **Esc** to close, arrow keys to select a loaded model, and **Enter** twice (or click twice) to confirm unloading it. Models without an actionable canonical name remain visible but cannot be copied or unloaded. The summary reports total loaded models and aggregate VRAM when Ollama provides it. These controls follow the standard Omarchy panel lifecycle and keyboard navigation behavior.
+- Open the widget to refresh. In the panel, use **R** to refresh, **C** to copy the selected model’s canonical name to the Wayland clipboard, **Esc** to close, arrow keys to select a loaded model, and **Enter** twice (or click twice) to confirm unloading it. Models without an actionable canonical name remain visible but cannot be copied or unloaded. The copy timeout covers starting `wl-copy` and establishing the selection, not ongoing clipboard ownership. The summary reports total loaded models and aggregate VRAM when Ollama provides it. These controls follow the standard Omarchy panel lifecycle and keyboard navigation behavior.
 
 ## Configuration
 

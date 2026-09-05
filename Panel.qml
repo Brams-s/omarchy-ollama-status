@@ -90,9 +90,10 @@ Panel {
       setCopyFeedback(copyTimedOut ? "Clipboard is resetting" : "Copy already in progress")
       return
     }
-    // Foreground mode keeps the clipboard-serving process under Quickshell's
-    // lifecycle control instead of allowing wl-copy to fork an orphan helper.
-    copyProcess.command = ["/usr/bin/wl-copy", "--foreground", "--type", "text/plain;charset=utf-8", "--", modelId]
+    // Normal wl-copy mode returns once it has established the selection. The
+    // short deadline below is only for this startup/setup step, not serving
+    // clipboard ownership after the request has completed.
+    copyProcess.command = ["/usr/bin/wl-copy", "--type", "text/plain;charset=utf-8", "--", modelId]
     copyBusy = true
     copyTimeout.restart()
     copyProcess.running = true
@@ -225,7 +226,7 @@ Panel {
       root.copyTimedOut = true
       copyProcess.running = false
       copyKill.restart()
-      root.setCopyFeedback("Clipboard timed out")
+      root.setCopyFeedback("Clipboard setup timed out")
     }
   }
 
