@@ -430,6 +430,7 @@ Panel {
             model: root.models
             delegate: FocusScope {
               required property var modelData
+              required property int index
               readonly property var modelItem: modelData || ({})
               readonly property bool selected: root.selectedIndex === index
               width: contentColumn.width

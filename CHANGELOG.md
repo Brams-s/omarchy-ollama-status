@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-09-06
+
+### Fixed
+- Declared the model-row delegate index explicitly so row selection and unload actions target the clicked model.
+
 ## [1.3.3] — 2026-09-06
 
 ### Fixed

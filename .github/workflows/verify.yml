@@ -77,4 +77,13 @@ jobs:
               test -f /opt/omarchy/shell/Ui/qmldir
               test -f /opt/omarchy/shell/Commons/qmldir
               OMARCHY_SHELL_ROOT=/opt/omarchy/shell QMLLINT="$lint" ./ci/qml-validate.sh
+              env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=none QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 QML_XHR_ALLOW_FILE_READ=1 QT_FORCE_STDERR_LOGGING=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 timeout 10s /usr/lib/qt6/bin/qml -f tests/qml/model-row-interaction.qml
+              set +e
+              # -S carries the test marker without creating another QML input.
+              mutation_output=$(env -u DISPLAY -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=none QT_QUICK_BACKEND=software QML_DISABLE_DISK_CACHE=1 QML_XHR_ALLOW_FILE_READ=1 QT_FORCE_STDERR_LOGGING=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 timeout 10s /usr/lib/qt6/bin/qml -f tests/qml/model-row-interaction.qml -S --mutate-missing-index 2>&1)
+              mutation_status=$?
+              set -e
+              printf "%s\n" "$mutation_output"
+              test "$mutation_status" -eq 1
+              [[ "$mutation_output" == *"FAIL: row-index:"* ]]
             '
