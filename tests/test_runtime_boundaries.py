@@ -34,6 +34,13 @@ def is_gone_or_zombie(pid):
 
 
 class RuntimeBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.environment = mock.patch.dict(
+            os.environ, {"OLLAMA_HOST": "http://127.0.0.1:11434"}, clear=False
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
     def test_cli_does_not_resolve_curl_from_path(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
@@ -72,7 +79,7 @@ class RuntimeBoundaryTests(unittest.TestCase):
             fake_curl.write_text(
                 "#!/usr/bin/python3\n"
                 "import json, os\n"
-                f"open({str(environment_dump)!r}, 'w').write(json.dumps(dict(os.environ)))\n"
+                f"open({str(environment_dump)!r}, 'w').write(json.dumps({{'environment': dict(os.environ), 'arguments': __import__('sys').argv[1:]}}))\n"
                 "print('{\"models\":[]}')\n"
             )
             fake_curl.chmod(0o755)
@@ -85,9 +92,140 @@ class RuntimeBoundaryTests(unittest.TestCase):
                 result = helper.perform("status")
 
             self.assertTrue(result["ok"])
-            child_environment = json.loads(environment_dump.read_text())
+            invocation = json.loads(environment_dump.read_text())
+            child_environment = invocation["environment"]
             self.assertNotIn("OLLAMA_STATUS_TEST_SECRET", child_environment)
             self.assertEqual(set(child_environment), {"LANG", "LC_ALL"})
+            self.assertEqual(invocation["arguments"][-1], "http://127.0.0.1:11434/api/ps")
+            self.assertEqual(invocation["arguments"][:5], ["-q", "--noproxy", "*", "--fail", "--silent"])
+
+    def test_endpoint_validation_canonicalizes_only_literal_loopback_urls(self):
+        helper = load_helper()
+        accepted = {
+            "127.0.0.1:11434": "http://127.0.0.1:11434/api/ps",
+            "http://127.1.2.3:9/": "http://127.1.2.3:9/api/ps",
+            "HTTPS://127.0.0.1:65535": "https://127.0.0.1:65535/api/ps",
+            "[::1]:1/": "http://[::1]:1/api/ps",
+        }
+        with mock.patch.object(helper, "CURL_PATH", str(HELPER)):
+            with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+                helper, "invoke_curl", return_value=("complete", 0, b'{"models":[]}')
+            ) as invoke:
+                result = helper.perform("status")
+                self.assertTrue(result["ok"])
+                self.assertEqual(invoke.call_args.args[0][-1], "http://127.0.0.1:11434/api/ps")
+            for endpoint, expected_url in accepted.items():
+                with self.subTest(endpoint=endpoint), mock.patch.dict(os.environ, {"OLLAMA_HOST": endpoint}), mock.patch.object(
+                    helper, "invoke_curl", return_value=("complete", 0, b'{"models":[]}')
+                ) as invoke:
+                    result = helper.perform("status")
+                    self.assertTrue(result["ok"])
+                    self.assertEqual(invoke.call_args.args[0][-1], expected_url)
+
+    def test_unsafe_endpoint_is_rejected_without_spawning_curl(self):
+        helper = load_helper()
+        rejected = (
+            "localhost:11434",
+            "http://192.168.1.1:11434",
+            "http://[::ffff:127.0.0.1]:11434",
+            "http://user@127.0.0.1:11434",
+            "http://127.0.0.1:11434/api/ps",
+            "http://127.0.0.1:11434?x=1",
+            "http://127.0.0.1:11434?",
+            "http://127.0.0.1:11434#fragment",
+            "http://127.0.0.1:11434#",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:",
+            "http://127.0.0.999:11434",
+            "http://127.00.0.1:11434",
+            "http://[::1:11434",
+            "//127.0.0.1:11434",
+            "http://127.0.0.1\\evil:11434",
+            " http://127.0.0.1:11434",
+            "http://127.0.0.1:11434\n",
+        )
+        with mock.patch.object(helper, "CURL_PATH", str(HELPER)):
+            for endpoint in rejected:
+                with self.subTest(endpoint=repr(endpoint)), mock.patch.dict(os.environ, {"OLLAMA_HOST": endpoint}), mock.patch.object(
+                    helper, "invoke_curl"
+                ) as invoke:
+                    result = helper.perform("version")
+                    self.assertEqual(result.get("kind"), "unsafe_endpoint")
+                    invoke.assert_not_called()
+
+    def test_curl_exit_outcomes_are_classified_by_perform(self):
+        helper = load_helper()
+        cases = (
+            ("status", "", 28, b"", "operation_timeout"),
+            ("version", "", 22, b"", "api_error"),
+            ("unload", "safe-model", 22, b"", "api_error"),
+            ("status", "", 63, b"", "response_too_large"),
+            ("version", "", 7, b"", "transport_error"),
+            ("unload", "safe-model", 0, b"not-json", "invalid_data"),
+        )
+        with mock.patch.object(helper, "CURL_PATH", str(HELPER)):
+            for operation, model, returncode, stdout, expected_kind in cases:
+                with self.subTest(operation=operation, returncode=returncode), mock.patch.object(
+                    helper, "invoke_curl", return_value=("complete", returncode, stdout)
+                ):
+                    result = helper.perform(operation, model)
+                    self.assertEqual(result.get("kind"), expected_kind)
+                    if returncode == 22:
+                        self.assertEqual(result.get("error"), "Ollama rejected the request.")
+
+    def test_eof_before_child_exit_obeys_deadline_and_reaps_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            pid_file = directory / "pid"
+            fake_curl = directory / "trusted-curl"
+            fake_curl.write_text(
+                "#!/usr/bin/python3\n"
+                "import os, signal, sys, time\n"
+                f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+                "os.close(sys.stdout.fileno())\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "time.sleep(10)\n"
+            )
+            fake_curl.chmod(0o755)
+            runner = directory / "runner.py"
+            runner.write_text(
+                "import json, sys\n"
+                f"sys.path.insert(0, {str(ROOT)!r})\n"
+                "import ollama_status\n"
+                f"ollama_status.CURL_PATH = {str(fake_curl)!r}\n"
+                "ollama_status.OPERATION_TIMEOUT_SECONDS = 0.1\n"
+                "ollama_status.TERM_GRACE_SECONDS = 0.05\n"
+                "print(json.dumps(ollama_status.perform('status')))\n"
+            )
+            runner_process = subprocess.Popen([PYTHON, str(runner)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            child_pid = None
+            try:
+                try:
+                    stdout, stderr = runner_process.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
+                    runner_process.kill()
+                    runner_process.communicate()
+                    self.fail("EOF wait exceeded its independent test deadline")
+                self.assertEqual(runner_process.returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout).get("kind"), "operation_timeout")
+                child_pid = int(pid_file.read_text())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child_pid, 0)
+            finally:
+                if child_pid is None:
+                    try:
+                        child_pid = int(pid_file.read_text())
+                    except (FileNotFoundError, OSError, ValueError):
+                        pass
+                if runner_process.poll() is None:
+                    runner_process.kill()
+                    runner_process.wait()
+                if child_pid is not None:
+                    try:
+                        os.killpg(child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_hung_curl_is_killed_and_reaped_after_operation_deadline(self):
         helper = load_helper()

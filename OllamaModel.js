@@ -22,6 +22,27 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Math.floor(number)))
 }
 
+function normalizeSettings(settings) {
+  settings = settings && typeof settings === "object" ? settings : ({})
+  return {
+    refreshIntervalSec: boundedInteger(settings.refreshIntervalSec, 15, 5, 300),
+    maxDisplayedModels: boundedInteger(settings.maxDisplayedModels, 12, 1, 12),
+    compactMode: settings.compactMode === true || settings.compactMode === "true" || settings.compactMode === 1 || settings.compactMode === "1"
+  }
+}
+
+function classifyErrorKind(result, fallback) {
+  var kind = plainText(result && result.kind, 80)
+  if (kind === "missing_dependency") {
+    var message = plainText(result && result.error, 160).toLowerCase()
+    if (message.indexOf("python3") !== -1) return "missing_python3"
+    if (message.indexOf("curl") !== -1) return "missing_curl"
+    return "missing_dependency"
+  }
+  var allowed = ["unsafe_endpoint", "transport_error", "response_too_large", "operation_timeout", "invalid_data", "invalid_request", "internal_error", "api_error"]
+  return allowed.indexOf(kind) !== -1 ? kind : fallback
+}
+
 function safeNumber(value) {
   var number = Number(value)
   return isFinite(number) && number >= 0 ? number : 0
@@ -123,6 +144,8 @@ if (typeof module !== "undefined") {
   module.exports = {
     plainText: plainText,
     boundedInteger: boundedInteger,
+    normalizeSettings: normalizeSettings,
+    classifyErrorKind: classifyErrorKind,
     safeNumber: safeNumber,
     safeContext: safeContext,
     canonicalModelId: canonicalModelId,

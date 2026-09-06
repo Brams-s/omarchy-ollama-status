@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-09-06
+
+### Fixed
+- Kept unload failures visible independently of later status refreshes, with production transition semantics covered by Node tests.
+- Tightened literal-loopback URL validation, bounded EOF-to-exit waiting, and corrected curl HTTP-error/timeout classification; added hermetic regression tests.
+
 ## [1.3.2] — 2026-09-05
 
 ### Security

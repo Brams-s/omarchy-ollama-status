@@ -22,7 +22,7 @@ Built for Omarchy's Quattro/Quickshell bar plugin host, using its shared third-p
 
 4. Add **Ollama Status** to a bar section if it is not placed automatically.
 
-The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` may only be a literal loopback endpoint (`127.x.x.x` or `[::1]`, with an optional port); hostnames and remote addresses are rejected. Requests ignore curl configuration and proxies.
+The default endpoint is `http://127.0.0.1:11434`. `OLLAMA_HOST` accepts only canonical literal-loopback URLs: a 127/8 IPv4 address or bracketed `[::1]`, with an optional HTTP(S) scheme, decimal port 1–65535 without leading-zero padding, and an optional single trailing root slash. Credentials, other paths, queries, fragments, hostnames, and remote addresses are rejected. Requests ignore curl configuration and proxies.
 
 ## Behaviour and controls
 
@@ -38,7 +38,7 @@ Configure each bar-widget entry with **Refresh interval (seconds)** (5–300, de
 
 ## Local checks
 
-Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, loopback-only endpoint policy, fixed executable identities, allowlisted child environments, whole-operation deadlines, bounded pipe/result handling, process cleanup, and unload request behavior without contacting Ollama.
+Run `./verify.sh` from this directory. It validates the manifest and release metadata, preview asset reference, helper sanitization, loopback-only endpoint policy, fixed executable identities, allowlisted child environments, whole-operation deadlines, bounded pipe/result handling, process cleanup, unload request behavior, and Node-tested service-state semantics without contacting Ollama. The Node checks cover pure transition semantics and structural QML contracts; they do not replace compositor, keyboard, clipboard, or process-lifecycle runtime evidence.
 
 CI performs non-conditional static QML validation in an immutable Arch container with Qt, Quickshell, and a pinned Omarchy Quattro shell import tree. It uses the digest-only official `docker.io/library/archlinux@sha256:694da1fce635e3a14d90751941b08f02c500e8724682f7a00768e7152251ec34` reference plus one matching dated Arch Archive epoch for all CI packages, then logs the image date/digest, archive epoch, package URLs, and installed tool versions. The QML policy fails on `import`, `missing-type`, and `unresolved-type` diagnostics; other diagnostics remain visible but nonfatal because Omarchy injects runtime bar and panel objects that static type inference cannot fully describe. To run the same import-aware lint locally, provide a matching shell tree and run `OMARCHY_SHELL_ROOT=/path/to/omarchy/shell ./ci/qml-validate.sh`. This validates imports and static types only; manually verify clipboard, panel behavior, and all compositor/runtime interactions in a local Omarchy/Quattro session. CI does not start Hyprland or a graphical Quickshell runtime.
 

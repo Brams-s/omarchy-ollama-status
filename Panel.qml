@@ -477,7 +477,7 @@ Panel {
             }
           }
 
-          Text { visible: root.ollamaService && root.ollamaService.errorText !== ""; width: parent.width; text: root.ollamaService ? root.plain(root.ollamaService.errorText, 300) : ""; color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
+          Text { visible: root.ollamaService && root.ollamaService.feedbackText !== ""; width: parent.width; text: root.ollamaService ? root.ollamaService.feedbackText : ""; color: root.urgent; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
           Text { width: parent.width; text: root.ollamaService && root.ollamaService.busy ? "Unloading model…" : root.activeCopyFeedback() !== "" ? root.activeCopyFeedback() : root.refreshFeedback() !== "" ? root.refreshFeedback() : root.models.length > 0 ? "Select a model, then press Enter again to confirm unload." : "Uses Ollama’s local API. Service control stays with your setup."; color: root.foreground; opacity: .65; wrapMode: Text.Wrap; font.pixelSize: Style.font.bodySmall; textFormat: Text.PlainText }
         }
       }

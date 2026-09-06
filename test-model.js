@@ -1,25 +1,36 @@
 const assert = require("assert")
 const fs = require("fs")
 const model = require("./OllamaModel.js")
+const stateModel = require("./OllamaState.js")
 
-function normalizeSettings(settings) {
-  settings = settings && typeof settings === "object" ? settings : {}
+function fixture() {
   return {
-    refreshIntervalSec: model.boundedInteger(settings.refreshIntervalSec, 15, 5, 300),
-    maxDisplayedModels: model.boundedInteger(settings.maxDisplayedModels, 12, 1, 12),
-    compactMode: settings.compactMode === true || settings.compactMode === "true" || settings.compactMode === 1 || settings.compactMode === "1"
+    plain: model.plainText,
+    models: [{ actionable: true, modelId: "exact-model", displayName: "Exact model" }],
+    loadedModelCount: 1,
+    aggregateVramBytes: 4,
+    state: "loaded",
+    errorText: "",
+    actionErrorText: "",
+    statusErrorKind: "",
+    versionError: "",
+    versionErrorKind: "",
+    actionErrorKind: "",
+    lastErrorKind: "",
+    lastSuccessfulRefreshMs: 0,
+    localApiStatus: "available",
+    failureCount: 0,
+    busy: false,
+    pendingModel: ""
   }
 }
 
-function classifyErrorKind(result, fallback) {
-  const kind = model.plainText(result && result.kind, 80)
-  if (kind === "missing_dependency") {
-    const message = model.plainText(result && result.error, 160).toLowerCase()
-    if (message.includes("python3")) return "missing_python3"
-    if (message.includes("curl")) return "missing_curl"
-    return "missing_dependency"
-  }
-  return ["unsafe_endpoint", "transport_error", "response_too_large", "invalid_data", "invalid_request", "internal_error", "api_error"].includes(kind) ? kind : fallback
+function successfulStatus() {
+  return { state: "loaded", models: [{ actionable: true, modelId: "refreshed-model", displayName: "Refreshed model" }], loadedModelCount: 3, aggregateVramBytes: 96, error: "", kind: "" }
+}
+
+function failedStatus(message) {
+  return { state: "unavailable", models: [], loadedModelCount: 0, aggregateVramBytes: 0, error: message, kind: "transport_error" }
 }
 
 assert.strictEqual(model.plainText(" <b>model</b>\n\u061c\u202Ename\u0000 ", 160), "model name")
@@ -54,11 +65,135 @@ const overlong = model.parseStatus({ ok: true, operation: "status", data: { mode
 assert.strictEqual(overlong.models[0].displayName.length, 160)
 assert.strictEqual(overlong.models[0].modelId, "")
 assert.strictEqual(overlong.models[0].actionable, false)
-assert.deepStrictEqual(normalizeSettings({ refreshIntervalSec: 1, maxDisplayedModels: 99, compactMode: "true" }), { refreshIntervalSec: 5, maxDisplayedModels: 12, compactMode: true })
-assert.deepStrictEqual(normalizeSettings({ refreshIntervalSec: "invalid", maxDisplayedModels: 0, compactMode: false }), { refreshIntervalSec: 15, maxDisplayedModels: 1, compactMode: false })
-assert.strictEqual(classifyErrorKind({ kind: "missing_dependency", error: "Missing dependency: python3 is required." }, "status_error"), "missing_python3")
-assert.strictEqual(classifyErrorKind({ kind: "missing_dependency", error: "Missing dependency: curl is required." }, "status_error"), "missing_curl")
-assert.strictEqual(classifyErrorKind({ kind: "<b>unexpected</b>" }, "status_error"), "status_error")
+assert.deepStrictEqual(model.normalizeSettings({ refreshIntervalSec: 1, maxDisplayedModels: 99, compactMode: "true" }), { refreshIntervalSec: 5, maxDisplayedModels: 12, compactMode: true })
+assert.deepStrictEqual(model.normalizeSettings({ refreshIntervalSec: "invalid", maxDisplayedModels: 0, compactMode: false }), { refreshIntervalSec: 15, maxDisplayedModels: 1, compactMode: false })
+assert.strictEqual(model.classifyErrorKind({ kind: "missing_dependency", error: "Missing dependency: python3 is required." }, "status_error"), "missing_python3")
+assert.strictEqual(model.classifyErrorKind({ kind: "missing_dependency", error: "Missing dependency: curl is required." }, "status_error"), "missing_curl")
+assert.strictEqual(model.classifyErrorKind({ kind: "operation_timeout" }, "status_error"), "operation_timeout")
+assert.strictEqual(model.classifyErrorKind({ kind: "<b>unexpected</b>" }, "status_error"), "status_error")
+
+// These cover pure production transition semantics, not Qt process/timer signals.
+{
+  const state = fixture()
+  assert.strictEqual(stateModel.beginUnload(state, "exact-model", false), true)
+  assert.strictEqual(state.pendingModel, "exact-model")
+  stateModel.finishUnload(state, "Unload rejected", "api_error")
+  assert.strictEqual(state.actionErrorText, "Unload rejected")
+  state.errorText = "Older status error"
+  state.statusErrorKind = "transport_error"
+  state.failureCount = 2
+  state.lastSuccessfulRefreshMs = 3
+  const outcome = successfulStatus()
+  assert.strictEqual(stateModel.applyStatus(state, outcome, 10), true)
+  assert.deepStrictEqual(state.models, outcome.models)
+  assert.strictEqual(state.loadedModelCount, 3)
+  assert.strictEqual(state.aggregateVramBytes, 96)
+  assert.strictEqual(state.state, "loaded")
+  assert.strictEqual(state.localApiStatus, "available")
+  assert.strictEqual(state.actionErrorText, "Unload rejected", "successful status retains unload feedback")
+  assert.strictEqual(state.actionErrorKind, "api_error", "successful status retains unload feedback kind")
+  assert.strictEqual(state.errorText, "")
+  assert.strictEqual(state.statusErrorKind, "")
+  assert.strictEqual(state.failureCount, 0)
+  assert.strictEqual(state.lastSuccessfulRefreshMs, 10)
+}
+{
+  const state = fixture()
+  stateModel.beginUnload(state, "exact-model", false)
+  stateModel.finishUnload(state, "Unload rejected", "api_error")
+  state.failureCount = 2
+  state.lastSuccessfulRefreshMs = 7
+  assert.strictEqual(stateModel.applyStatus(state, failedStatus("Status unavailable"), 11), false)
+  assert.strictEqual(state.actionErrorText, "Unload rejected")
+  assert.strictEqual(state.actionErrorKind, "api_error")
+  assert.strictEqual(state.errorText, "Status unavailable")
+  assert.deepStrictEqual(state.models, [])
+  assert.strictEqual(state.loadedModelCount, 0)
+  assert.strictEqual(state.aggregateVramBytes, 0)
+  assert.strictEqual(state.state, "unavailable")
+  assert.strictEqual(state.localApiStatus, "unavailable")
+  assert.strictEqual(state.statusErrorKind, "transport_error")
+  assert.strictEqual(state.failureCount, 3)
+  assert.strictEqual(state.lastSuccessfulRefreshMs, 7)
+  assert.strictEqual(stateModel.feedbackText(state), "Unload: Unload rejected\nStatus: Status unavailable")
+}
+{
+  const state = fixture()
+  stateModel.finishUnload(state, "Older unload failure", "api_error")
+  stateModel.applyStatus(state, successfulStatus(), 12)
+  assert.strictEqual(state.actionErrorText, "Older unload failure")
+  stateModel.applyStatus(state, failedStatus("Older status failure"), 13)
+  assert.strictEqual(state.actionErrorText, "Older unload failure")
+  assert.strictEqual(state.errorText, "Older status failure")
+  stateModel.applyStatus(state, failedStatus("Repeated status failure"), 14)
+  assert.strictEqual(state.actionErrorText, "Older unload failure", "repeated status retains action feedback")
+}
+{
+  const state = fixture()
+  state.actionErrorText = "Keep this unload error"
+  state.actionErrorKind = "api_error"
+  state.busy = true
+  assert.strictEqual(stateModel.beginUnload(state, "exact-model", false), false)
+  assert.strictEqual(state.actionErrorText, "Keep this unload error")
+  state.busy = false
+  for (const [name, running] of [["exact-model", true], [42, false], ["missing", false]]) {
+    assert.strictEqual(stateModel.beginUnload(state, name, running), false)
+    assert.strictEqual(state.actionErrorText, "Keep this unload error")
+    assert.strictEqual(state.actionErrorKind, "api_error")
+  }
+  state.models.push({ actionable: false, modelId: "not-actionable" })
+  assert.strictEqual(stateModel.beginUnload(state, "not-actionable", false), false)
+  assert.strictEqual(state.actionErrorText, "Keep this unload error")
+}
+{
+  const state = fixture()
+  state.errorText = "Existing status error"
+  state.statusErrorKind = "transport_error"
+  state.versionError = "Existing version diagnostic"
+  state.versionErrorKind = "version_error"
+  state.actionErrorText = "Old unload error"
+  state.actionErrorKind = "api_error"
+  assert.strictEqual(stateModel.beginUnload(state, "exact-model", false), true)
+  assert.strictEqual(state.pendingModel, "exact-model")
+  assert.strictEqual(state.actionErrorText, "")
+  assert.strictEqual(state.actionErrorKind, "")
+  assert.strictEqual(state.errorText, "Existing status error")
+  assert.strictEqual(state.versionError, "Existing version diagnostic")
+  assert.strictEqual(state.versionErrorKind, "version_error")
+  assert.strictEqual(state.lastErrorKind, "transport_error")
+  stateModel.finishUnload(state, "", "")
+  assert.strictEqual(state.errorText, "Existing status error", "successful unload keeps unrelated status error")
+}
+{
+  const state = fixture()
+  assert.strictEqual(stateModel.beginUnload(state, "exact-model", false), true)
+  stateModel.failUnloadStart(state)
+  assert.strictEqual(state.busy, false)
+  assert.strictEqual(state.pendingModel, "")
+  assert.strictEqual(state.actionErrorKind, "missing_python3")
+  stateModel.applyStatus(state, successfulStatus(), 15)
+  assert.strictEqual(state.actionErrorText, "The unload helper could not start.")
+  stateModel.applyStatus(state, failedStatus("Status after start failure"), 16)
+  assert.strictEqual(state.actionErrorText, "The unload helper could not start.")
+  assert.strictEqual(state.errorText, "Status after start failure")
+}
+{
+  const first = fixture()
+  const second = fixture()
+  stateModel.finishUnload(first, "First only", "api_error")
+  stateModel.applyStatus(second, failedStatus("Second only"), 17)
+  assert.strictEqual(first.errorText, "")
+  assert.strictEqual(second.actionErrorText, "")
+}
+{
+  const state = fixture()
+  state.actionErrorText = "<b>" + "a".repeat(400) + "</b>"
+  state.errorText = "<i>" + "s".repeat(400) + "</i>"
+  const feedback = stateModel.feedbackText(state)
+  const [actionLine, statusLine] = feedback.split("\n")
+  assert.strictEqual(actionLine.length, "Unload: ".length + 300)
+  assert.strictEqual(statusLine.length, "Status: ".length + 300)
+}
 const serviceSource = fs.readFileSync("Service.qml", "utf8")
 assert.match(serviceSource, /function configure\(settings, sourceId\)/)
 assert.match(serviceSource, /function unconfigure\(sourceId\)/)
@@ -68,7 +203,8 @@ assert.match(serviceSource, /lastRefreshCompletedMs/)
 assert.match(serviceSource, /versionErrorKind/)
 assert.match(serviceSource, /loadedModelCount/)
 assert.match(serviceSource, /aggregateVramBytes/)
-assert.match(serviceSource, /item\.actionable === true && item\.modelId === name/)
+assert.match(serviceSource, /OllamaState\.beginUnload\(root, name, action\.running\)/)
+assert.match(serviceSource, /readonly property string feedbackText: OllamaState\.feedbackText\(root\)/)
 const widgetSource = fs.readFileSync("BarWidget.qml", "utf8")
 assert.doesNotMatch(widgetSource, /String\(root\)/)
 assert.match(widgetSource, /moduleSlots/)

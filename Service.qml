@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "OllamaModel.js" as OllamaModel
+import "OllamaState.js" as OllamaState
 
 Item {
   id: root
@@ -14,6 +15,7 @@ Item {
   property int loadedModelCount: 0
   property double aggregateVramBytes: 0
   property string errorText: ""
+  property string actionErrorText: ""
   property string apiVersion: ""
   property string versionError: ""
   property string versionErrorKind: ""
@@ -31,6 +33,7 @@ Item {
   property int failureCount: 0
   property string pendingModel: ""
   property bool pendingRefresh: false
+  readonly property string feedbackText: OllamaState.feedbackText(root)
   readonly property string pythonPath: "/usr/bin/python3"
   readonly property string scriptPath: decodeURIComponent(Qt.resolvedUrl("ollama_status.py").toString().replace(/^file:\/\//, ""))
   readonly property var processEnvironment: ({
@@ -47,14 +50,7 @@ Item {
     ? Math.min(refreshIntervalSec * 1000 * Math.pow(2, Math.min(failureCount, 3)), 300000)
     : refreshIntervalSec * 1000
 
-  function normalizeSettings(settings) {
-    settings = settings && typeof settings === "object" ? settings : ({})
-    return {
-      refreshIntervalSec: OllamaModel.boundedInteger(settings.refreshIntervalSec, 15, 5, 300),
-      maxDisplayedModels: OllamaModel.boundedInteger(settings.maxDisplayedModels, 12, 1, 12),
-      compactMode: settings.compactMode === true || settings.compactMode === "true" || settings.compactMode === 1 || settings.compactMode === "1"
-    }
-  }
+  function plain(value, maximum) { return OllamaModel.plainText(value, maximum) }
   function sameSettings(left, right) {
     return left && right && left.refreshIntervalSec === right.refreshIntervalSec
       && left.maxDisplayedModels === right.maxDisplayedModels && left.compactMode === right.compactMode
@@ -65,7 +61,7 @@ Item {
   }
   function applyConfiguration() {
     var selected = selectedConfiguration()
-    var next = selected ? selected.settings : normalizeSettings({})
+    var next = selected ? selected.settings : OllamaModel.normalizeSettings({})
     var previousLimit = maxDisplayedModels
     var changed = refreshIntervalSec !== next.refreshIntervalSec || previousLimit !== next.maxDisplayedModels || compactMode !== next.compactMode
     _configurationSource = selected ? selected.source : ""
@@ -82,7 +78,7 @@ Item {
   // lexical source selection prevents monitor instances from flapping it.
   function configure(settings, sourceId) {
     var source = String(sourceId || "default")
-    var nextSettings = normalizeSettings(settings)
+    var nextSettings = OllamaModel.normalizeSettings(settings)
     var current = _configurations[source]
     if (sameSettings(current, nextSettings)) return false
     var next = ({})
@@ -121,73 +117,31 @@ Item {
   }
 
   function unload(name) {
-    if (busy || action.running || typeof name !== "string") return false
-    var model = ""
-    for (var i = 0; i < models.length; i++) {
-      var item = models[i]
-      if (item && item.actionable === true && item.modelId === name) {
-        model = item.modelId
-        break
-      }
-    }
-    if (model === "") return false
-    busy = true
-    pendingModel = model
-    errorText = ""
+    if (!OllamaState.beginUnload(root, name, action.running)) return false
     action.outputText = ""
     action.expected = true
     action.timedOut = false
-    action.command = [pythonPath, scriptPath, "unload", model]
+    action.command = [pythonPath, scriptPath, "unload", pendingModel]
     actionDeadline.restart()
     action.running = true
     return true
   }
 
-  function classifyErrorKind(result, fallback) {
-    var kind = OllamaModel.plainText(result && result.kind, 80)
-    if (kind === "missing_dependency") {
-      var message = OllamaModel.plainText(result && result.error, 160).toLowerCase()
-      if (message.indexOf("python3") !== -1) return "missing_python3"
-      if (message.indexOf("curl") !== -1) return "missing_curl"
-      return "missing_dependency"
-    }
-    var allowed = ["unsafe_endpoint", "transport_error", "response_too_large", "operation_timeout", "invalid_data", "invalid_request", "internal_error", "api_error"]
-    return allowed.indexOf(kind) !== -1 ? kind : fallback
-  }
-  function updateLastErrorKind() {
-    lastErrorKind = statusErrorKind || versionErrorKind || actionErrorKind || ""
-  }
   function applyStatus(output, completedAt) {
     var result = OllamaModel.parseResult(output, "status")
     if (result.ok !== true) {
-      models = []
-      loadedModelCount = 0
-      aggregateVramBytes = 0
-      state = "unavailable"
-      errorText = OllamaModel.errorFor(result, "Ollama status request failed.")
-      localApiStatus = "unavailable"
-      statusErrorKind = classifyErrorKind(result, "status_error")
-      updateLastErrorKind()
-      failureCount += 1
-      return false
+      return OllamaState.applyStatus(root, {
+        state: "unavailable", models: [], loadedModelCount: 0, aggregateVramBytes: 0,
+        error: OllamaModel.errorFor(result, "Ollama status request failed."),
+        kind: OllamaModel.classifyErrorKind(result, "status_error")
+      }, completedAt)
     }
     var next = OllamaModel.parseStatus(result, maxDisplayedModels)
-    models = next.models
-    loadedModelCount = next.loadedModelCount
-    aggregateVramBytes = next.aggregateVramBytes
-    state = next.state
-    errorText = next.error
-    localApiStatus = next.state === "unavailable" ? "unavailable" : "available"
-    if (next.state === "unavailable") {
-      statusErrorKind = "invalid_data"
-      updateLastErrorKind()
-    }
-    else {
-      lastSuccessfulRefreshMs = completedAt
-      statusErrorKind = ""
-      updateLastErrorKind()
-    }
-    failureCount = next.state === "unavailable" ? failureCount + 1 : 0
+    var succeeded = OllamaState.applyStatus(root, {
+      state: next.state, models: next.models, loadedModelCount: next.loadedModelCount,
+      aggregateVramBytes: next.aggregateVramBytes, error: next.error,
+      kind: next.state === "unavailable" ? "invalid_data" : ""
+    }, completedAt)
     if (next.state !== "unavailable" && apiVersion === "" && !version.running) {
       version.outputText = ""
       version.expected = true
@@ -195,7 +149,7 @@ Item {
       versionDeadline.restart()
       version.running = true
     }
-    return next.state !== "unavailable"
+    return succeeded
   }
 
   function applyVersion(output) {
@@ -204,12 +158,12 @@ Item {
       apiVersion = OllamaModel.plainText(result.data.version, 80)
       versionError = ""
       versionErrorKind = ""
-      updateLastErrorKind()
+      OllamaState.updateLastErrorKind(root)
     } else {
       apiVersion = ""
       versionError = OllamaModel.errorFor(result, "Ollama version diagnostics failed.")
-      versionErrorKind = classifyErrorKind(result, "version_error")
-      updateLastErrorKind()
+      versionErrorKind = OllamaModel.classifyErrorKind(result, "version_error")
+      OllamaState.updateLastErrorKind(root)
     }
   }
 
@@ -235,11 +189,7 @@ Item {
   function recoverActionStart() {
     if (action.running || !action.expected) return
     action.expected = false
-    errorText = "The unload helper could not start."
-    actionErrorKind = "missing_python3"
-    updateLastErrorKind()
-    busy = false
-    pendingModel = ""
+    OllamaState.failUnloadStart(root)
     refresh()
   }
 
@@ -356,12 +306,8 @@ Item {
       action.timedOut = false
       var result = OllamaModel.parseResult(action.outputText, "unload")
       if (result.ok !== true) {
-        root.errorText = OllamaModel.errorFor(result, "The unload request failed.")
-        root.actionErrorKind = root.classifyErrorKind(result, "unload_error")
-        root.updateLastErrorKind()
-      } else { root.actionErrorKind = ""; root.updateLastErrorKind() }
-      root.busy = false
-      root.pendingModel = ""
+        OllamaState.finishUnload(root, OllamaModel.errorFor(result, "The unload request failed."), OllamaModel.classifyErrorKind(result, "unload_error"))
+      } else OllamaState.finishUnload(root, "", "")
       root.refresh()
     }
   }

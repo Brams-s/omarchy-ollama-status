@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 import ctypes
+import ipaddress
 import json
 import math
 import os
 from pathlib import Path
-import re
 import selectors
 import signal
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 CURL_PATH = "/usr/bin/curl"
 DEFAULT_HOST = "http://127.0.0.1:11434"
@@ -21,7 +22,6 @@ MAX_RESPONSE_BYTES = 65536
 MAX_RESULT_BYTES = 32768
 OPERATION_TIMEOUT_SECONDS = 4.0
 TERM_GRACE_SECONDS = 0.25
-LOOPBACK_RE = re.compile(r"^https?://(?:127(?:\.[0-9]{1,3}){3}|\[::1\])(?::[0-9]{1,5})?$")
 _PR_SET_PDEATHSIG = 1
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
@@ -32,9 +32,48 @@ def result_error(operation: str, kind: str, message: str) -> dict[str, object]:
 
 
 def normalized_host(value: str) -> str:
-    if not value.startswith(("http://", "https://")):
-        value = "http://" + value
-    return value.rstrip("/")
+    """Return a canonical, literal loopback HTTP endpoint or raise ValueError."""
+    if not value or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("unsafe endpoint")
+    if "\\" in value or "?" in value or "#" in value:
+        raise ValueError("unsafe endpoint")
+
+    candidate = value if value.lower().startswith(("http://", "https://")) else "http://" + value
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        raise ValueError("unsafe endpoint") from None
+
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or "@" in parsed.netloc
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or port is not None and not 1 <= port <= 65535
+    ):
+        raise ValueError("unsafe endpoint")
+
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+    except ValueError:
+        raise ValueError("unsafe endpoint") from None
+    if address.version == 4 and address in ipaddress.ip_network("127.0.0.0/8"):
+        authority = str(address)
+    elif address.version == 6 and address == ipaddress.IPv6Address("::1"):
+        authority = "[::1]"
+    else:
+        raise ValueError("unsafe endpoint")
+    if port is not None:
+        authority += f":{port}"
+
+    # Require the supplied authority to already be unambiguous, then construct
+    # the URL from validated components rather than retaining parsed text.
+    if parsed.netloc != authority:
+        raise ValueError("unsafe endpoint")
+    return f"{parsed.scheme.lower()}://{authority}"
 
 
 def process_group_exists(group_id: int) -> bool:
@@ -80,6 +119,7 @@ def prepare_child(parent_pid: int) -> None:
 def invoke_curl(command: list[str]) -> tuple[str, int, bytes]:
     global _ACTIVE_PROCESS
     parent_pid = os.getpid()
+    deadline = time.monotonic() + OPERATION_TIMEOUT_SECONDS
     process = subprocess.Popen(
         command,
         stdin=subprocess.DEVNULL,
@@ -91,7 +131,6 @@ def invoke_curl(command: list[str]) -> tuple[str, int, bytes]:
     _ACTIVE_PROCESS = process
     assert process.stdout is not None
     output = bytearray()
-    deadline = time.monotonic() + OPERATION_TIMEOUT_SECONDS
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     try:
@@ -102,7 +141,15 @@ def invoke_curl(command: list[str]) -> tuple[str, int, bytes]:
                 return "timeout", process.returncode or -signal.SIGKILL, b""
             chunk = os.read(process.stdout.fileno(), min(8192, MAX_RESPONSE_BYTES + 1 - len(output)))
             if not chunk:
-                process.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    stop_process_group(process)
+                    return "timeout", process.returncode or -signal.SIGKILL, b""
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    stop_process_group(process)
+                    return "timeout", process.returncode or -signal.SIGKILL, b""
                 return "complete", process.returncode, bytes(output)
             output.extend(chunk)
             if len(output) > MAX_RESPONSE_BYTES:
@@ -163,8 +210,9 @@ def status_result(response: object) -> dict[str, object]:
 def perform(operation: str, model: str = "") -> dict[str, object]:
     if operation not in {"status", "version", "unload"}:
         return result_error("status", "invalid_request", "Unknown Ollama Status operation.")
-    host = normalized_host(os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
-    if not LOOPBACK_RE.fullmatch(host):
+    try:
+        host = normalized_host(os.environ.get("OLLAMA_HOST", DEFAULT_HOST))
+    except ValueError:
         return result_error(operation, "unsafe_endpoint", "For safety, Ollama Status only permits a literal loopback endpoint (127.0.0.1 or [::1]).")
     if not Path(CURL_PATH).is_file():
         return result_error(operation, "missing_dependency", "Missing dependency: curl is required to contact the Ollama API.")
@@ -213,6 +261,10 @@ def perform(operation: str, model: str = "") -> dict[str, object]:
         return result_error(operation, "operation_timeout", "The local Ollama request timed out.")
     if outcome == "overflow" or returncode == 63:
         return result_error(operation, "response_too_large", "Ollama returned an oversized response.")
+    if returncode == 28:
+        return result_error(operation, "operation_timeout", "The local Ollama request timed out.")
+    if returncode == 22:
+        return result_error(operation, "api_error", "Ollama rejected the request.")
     if returncode != 0:
         return result_error(operation, "transport_error", "Cannot reach the configured Ollama endpoint. Start Ollama using your preferred setup.")
     try:
